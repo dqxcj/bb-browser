@@ -128,8 +128,12 @@ async function ensureDaemon(): Promise<void> {
     }
   }
   const daemonPath = getDaemonPath();
-  console.log(`${LOG_PREFIX} Spawning daemon: ${daemonPath}`);
-  const child = spawn(process.execPath, [daemonPath], { detached: true, stdio: "ignore" });
+  const daemonArgs = [daemonPath];
+  if (process.env.CDP_PORT) {
+    daemonArgs.push("--cdp-port", process.env.CDP_PORT);
+  }
+  console.log(`${LOG_PREFIX} Spawning daemon: ${daemonPath}${process.env.CDP_PORT ? ` --cdp-port ${process.env.CDP_PORT}` : ""}`);
+  const child = spawn(process.execPath, daemonArgs, { detached: true, stdio: "ignore" });
   child.unref();
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
