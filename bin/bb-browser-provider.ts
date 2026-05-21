@@ -24,6 +24,9 @@ import {
   HeartbeatSchema,
   HubErrorSchema,
 } from "@pinixai/hub-client";
+// GetClipWebResultSchema is not re-exported from @pinixai/hub-client index;
+// import directly from the gen file via relative path to node_modules.
+import { GetClipWebResultSchema, type GetClipWebCommand } from "../node_modules/@pinixai/hub-client/src/gen/hub_pb.ts";
 import { COMMANDS } from "../packages/shared/src/commands.ts";
 import { COMMAND_TIMEOUT, generateId } from "../packages/shared/src/index.ts";
 import type { Request, Response } from "../packages/shared/src/protocol.ts";
@@ -41,6 +44,7 @@ import { execFile } from "node:child_process";
 import { join, dirname, resolve, relative, extname } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createHmac } from "node:crypto";
 import type { z } from "zod";
 
 declare const process: {
@@ -66,6 +70,10 @@ const BROWSER_CLIP_DOMAIN = "浏览器";
 const RECONNECT_DELAY_MS = 5000;
 const REGISTER_TIMEOUT_MS = 10000;
 const HEARTBEAT_INTERVAL_MS = 15000;
+
+const VIEWER_PORT = "3334";
+const VIEWER_API_BASE = `http://127.0.0.1:${VIEWER_PORT}`;
+let viewerProcess: ReturnType<typeof spawn> | null = null;
 
 const LOCAL_SITES_DIR = join(SHARED_DAEMON_DIR, "sites");
 const COMMUNITY_SITES_DIR = join(SHARED_DAEMON_DIR, "bb-sites");
@@ -140,6 +148,113 @@ async function daemonCommand(request: Request): Promise<Response> {
   if (!cachedDaemonInfo) cachedDaemonInfo = await readDaemonJson();
   if (!cachedDaemonInfo) throw new Error("No daemon.json found. Is the daemon running?");
   return httpJson<Response>("POST", "/command", cachedDaemonInfo, request, COMMAND_TIMEOUT);
+}
+
+// ---------------------------------------------------------------------------
+// TURN ephemeral credentials (TURN REST API / RFC 7635 time-limited)
+// ---------------------------------------------------------------------------
+
+function generateTurnCredentials(secret: string, ttlSeconds = 86400): { username: string; password: string } {
+  const expiry = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const username = `${expiry}:bbviewer`;
+  const password = createHmac("sha1", secret).update(username).digest("base64");
+  return { username, password };
+}
+
+// ---------------------------------------------------------------------------
+// Viewer sidecar management
+// ---------------------------------------------------------------------------
+
+function findViewerBinary(): string | null {
+  const localPath = join(SHARED_DAEMON_DIR, "bin", "bb-viewer");
+  if (existsSync(localPath)) return localPath;
+  // Fall back to PATH
+  return "bb-viewer";
+}
+
+async function ensureViewer(): Promise<void> {
+  if (viewerProcess && !viewerProcess.killed) {
+    try {
+      const resp = await fetch(`${VIEWER_API_BASE}/health`, { signal: AbortSignal.timeout(2000) });
+      if (resp.ok) return;
+    } catch {}
+    // Not healthy — kill and respawn
+    try { viewerProcess.kill(); } catch {}
+    viewerProcess = null;
+  }
+
+  const bin = findViewerBinary();
+  if (!bin) throw new Error("bb-viewer binary not found");
+
+  const cdpPort = cachedDaemonInfo?.cdpPort?.toString() || process.env.CDP_PORT || "9222";
+  const args = ["--api-only", "--cdp-port", cdpPort, "--port", VIEWER_PORT];
+
+  // Generate ephemeral TURN credentials (valid 24h). Both bb-viewer (Pion
+  // relay candidate gathering) and the frontend (WebRTC connection) use
+  // the same credentials. If the viewer runs >24h, it will be restarted
+  // with fresh credentials on the next view.start.
+  const turnUrl = process.env.TURN_URL;
+  const turnSecret = process.env.TURN_SECRET;
+  if (turnUrl && turnSecret) {
+    const { username, password } = generateTurnCredentials(turnSecret);
+    args.push("--turn-url", turnUrl, "--turn-user", username, "--turn-cred", password);
+  } else if (turnUrl) {
+    args.push("--turn-url", turnUrl);
+  }
+
+  console.log(`${LOG_PREFIX} Spawning viewer: ${bin} ${args.join(" ")}`);
+  const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+  viewerProcess = child;
+
+  child.stdout?.on("data", (d: Buffer) => {
+    const lines = d.toString().trim().split("\n");
+    for (const line of lines) console.log(`${LOG_PREFIX} [viewer] ${line}`);
+  });
+  child.stderr?.on("data", (d: Buffer) => {
+    const lines = d.toString().trim().split("\n");
+    for (const line of lines) console.error(`${LOG_PREFIX} [viewer] ${line}`);
+  });
+  child.on("exit", (code) => {
+    console.log(`${LOG_PREFIX} [viewer] exited with code ${code}`);
+    if (viewerProcess === child) viewerProcess = null;
+  });
+
+  // Wait for health check
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const resp = await fetch(`${VIEWER_API_BASE}/health`, { signal: AbortSignal.timeout(2000) });
+      if (resp.ok) {
+        console.log(`${LOG_PREFIX} Viewer ready at port ${VIEWER_PORT}`);
+        return;
+      }
+    } catch {}
+  }
+  throw new Error("Viewer did not become healthy in 10s");
+}
+
+function stopViewer(): void {
+  if (viewerProcess && !viewerProcess.killed) {
+    console.log(`${LOG_PREFIX} Stopping viewer`);
+    try { viewerProcess.kill(); } catch {}
+    viewerProcess = null;
+  }
+}
+
+async function viewerCommand(path: string, body?: unknown): Promise<unknown> {
+  await ensureViewer();
+  const url = `${VIEWER_API_BASE}${path}`;
+  const opts: RequestInit = {
+    method: body ? "POST" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+    signal: AbortSignal.timeout(15000),
+  };
+  const resp = await fetch(url, opts);
+  const text = await resp.text();
+  if (!resp.ok) throw new Error(`Viewer ${path} failed (${resp.status}): ${text}`);
+  try { return JSON.parse(text); } catch { return { output: text }; }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,15 +411,66 @@ function buildPlatformClips(): PlatformClip[] {
 // ---------------------------------------------------------------------------
 
 const BROWSER_COMMANDS = COMMANDS.filter((c) => c.category !== "site");
-const BROWSER_COMMAND_NAMES = BROWSER_COMMANDS.map((c) => c.name);
+
+const VIEW_COMMANDS = [
+  {
+    name: "view.start",
+    description: "Start remote viewing: creates a WebRTC peer and returns offer SDP + ICE candidates",
+    inputSchema: JSON.stringify({ type: "object", properties: {}, additionalProperties: true }),
+  },
+  {
+    name: "view.answer",
+    description: "Complete WebRTC connection: accepts answer SDP + ICE candidates, starts video streaming",
+    inputSchema: JSON.stringify({
+      type: "object",
+      properties: {
+        answer_sdp: { type: "string", description: "Answer SDP from the remote peer" },
+        candidates: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              candidate: { type: "string" },
+              sdpMLineIndex: { type: "number" },
+            },
+            required: ["candidate", "sdpMLineIndex"],
+          },
+          description: "ICE candidates from the remote peer",
+        },
+      },
+      required: ["answer_sdp"],
+      additionalProperties: true,
+    }),
+  },
+  {
+    name: "view.close",
+    description: "Stop remote viewing and close the WebRTC peer",
+    inputSchema: JSON.stringify({ type: "object", properties: {}, additionalProperties: true }),
+  },
+];
+
+const BROWSER_COMMAND_NAMES = [
+  ...BROWSER_COMMANDS.map((c) => c.name),
+  "view.start",
+  "view.answer",
+  "view.close",
+];
 
 function buildClipRegistrations() {
-  const browserCommands = BROWSER_COMMANDS.map((cmd) => ({
-    name: cmd.name,
-    description: cmd.description,
-    input: JSON.stringify(zodToJsonSchema(cmd.args)),
-    output: JSON.stringify({ type: "object", additionalProperties: true }),
-  }));
+  const browserCommands = [
+    ...BROWSER_COMMANDS.map((cmd) => ({
+      name: cmd.name,
+      description: cmd.description,
+      input: JSON.stringify(zodToJsonSchema(cmd.args)),
+      output: JSON.stringify({ type: "object", additionalProperties: true }),
+    })),
+    ...VIEW_COMMANDS.map((cmd) => ({
+      name: cmd.name,
+      description: cmd.description,
+      input: cmd.inputSchema,
+      output: JSON.stringify({ type: "object", additionalProperties: true }),
+    })),
+  ];
 
   const platformClips = buildPlatformClips();
 
@@ -314,7 +480,7 @@ function buildClipRegistrations() {
     version: CLIP_VERSION,
     domain: BROWSER_CLIP_DOMAIN,
     commands: browserCommands,
-    hasWeb: false,
+    hasWeb: true,
     dependencies: [],
     tokenProtected: false,
   });
@@ -635,7 +801,10 @@ class HubBridge {
           }
           case "invokeInput": break; // unary commands only
           case "pong": break;
-          case "getClipWebCommand": break; // no web assets
+          case "getClipWebCommand": {
+            void this.handleGetClipWeb(queue, msg.payload.value);
+            break;
+          }
           default: break;
         }
       }
@@ -661,7 +830,13 @@ class HubBridge {
       const input = decodeInput(inv.input);
       let result: unknown;
 
-      if (clipName === BROWSER_CLIP_ALIAS) {
+      if (clipName === BROWSER_CLIP_ALIAS && command === "view.start") {
+        result = await viewerCommand("/peer/create");
+      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.answer") {
+        result = await viewerCommand("/peer/answer", input);
+      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.close") {
+        result = await viewerCommand("/peer/close");
+      } else if (clipName === BROWSER_CLIP_ALIAS) {
         result = await executeBrowserCommand(command, input);
       } else if (this.platformClipAliases.has(clipName)) {
         result = await executeSiteCommand(clipName, command, input);
@@ -684,6 +859,115 @@ class HubBridge {
       this.sendDataResult(queue, requestId, output, undefined);
     } catch (err) {
       this.sendDataResult(queue, requestId, undefined, err);
+    }
+  }
+
+  private async handleGetClipWeb(queue: AsyncMessageQueue<ProviderMessage>, cmd: GetClipWebCommand): Promise<void> {
+    const requestId = cmd.requestId?.trim();
+    if (!requestId) return;
+
+    try {
+      let filePath = cmd.path?.trim() || "";
+      // Default to view.html
+      if (!filePath || filePath === "/" || filePath === "index.html") filePath = "view.html";
+      // Strip leading slash
+      if (filePath.startsWith("/")) filePath = filePath.slice(1);
+
+      // Security: prevent directory traversal
+      if (filePath.includes("..") || filePath.startsWith("/")) {
+        throw new Error("Invalid path");
+      }
+
+      // Resolve relative to web/ directory alongside the source file
+      const currentDir = dirname(fileURLToPath(import.meta.url));
+      const webDir = resolve(currentDir, "../web");
+      const fullPath = join(webDir, filePath);
+
+      // Ensure the resolved path is within webDir
+      const resolvedFull = resolve(fullPath);
+      const resolvedWeb = resolve(webDir);
+      if (!resolvedFull.startsWith(resolvedWeb)) {
+        throw new Error("Invalid path");
+      }
+
+      const content = await readFileAsync(fullPath);
+
+      // Content type
+      const ext = extname(filePath).toLowerCase();
+      const MIME_MAP: Record<string, string> = {
+        ".html": "text/html; charset=utf-8",
+        ".js": "application/javascript; charset=utf-8",
+        ".mjs": "application/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".ico": "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+      };
+      const contentType = MIME_MAP[ext] || "application/octet-stream";
+
+      // ETag based on content length (simple)
+      const etag = `"${content.length.toString(16)}"`;
+
+      // Handle if-none-match
+      if (cmd.ifNoneMatch && cmd.ifNoneMatch === etag) {
+        queue.push(create(ProviderMessageSchema, {
+          payload: {
+            case: "getClipWebResult",
+            value: create(GetClipWebResultSchema, {
+              requestId,
+              notModified: true,
+              etag,
+              totalSize: BigInt(content.length),
+            }),
+          },
+        }));
+        return;
+      }
+
+      // Handle range requests (offset/length)
+      const offset = Number(cmd.offset || 0n);
+      const length = Number(cmd.length || 0n);
+      let slice: Uint8Array;
+      if (length > 0) {
+        slice = new Uint8Array(content.buffer, content.byteOffset + offset, Math.min(length, content.length - offset));
+      } else if (offset > 0) {
+        slice = new Uint8Array(content.buffer, content.byteOffset + offset);
+      } else {
+        slice = new Uint8Array(content);
+      }
+
+      queue.push(create(ProviderMessageSchema, {
+        payload: {
+          case: "getClipWebResult",
+          value: create(GetClipWebResultSchema, {
+            requestId,
+            content: slice,
+            contentType,
+            etag,
+            totalSize: BigInt(content.length),
+          }),
+        },
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const code = message === "Invalid path" ? "invalid_argument" : "not_found";
+      queue.push(create(ProviderMessageSchema, {
+        payload: {
+          case: "getClipWebResult",
+          value: create(GetClipWebResultSchema, {
+            requestId,
+            error: create(HubErrorSchema, { code, message }),
+          }),
+        },
+      }));
     }
   }
 
@@ -806,8 +1090,8 @@ function main(): void {
 
   const bridge = new HubBridge(hubUrl, platformClips);
 
-  process.on("SIGINT", () => { bridge.stop(); process.exit(0); });
-  process.on("SIGTERM", () => { bridge.stop(); process.exit(0); });
+  process.on("SIGINT", () => { stopViewer(); bridge.stop(); process.exit(0); });
+  process.on("SIGTERM", () => { stopViewer(); bridge.stop(); process.exit(0); });
   process.on("unhandledRejection", (r) => { console.error(`${LOG_PREFIX} Unhandled rejection: ${r instanceof Error ? r.message : r}`); });
   process.on("uncaughtException", (e) => { console.error(`${LOG_PREFIX} Uncaught exception: ${e instanceof Error ? e.message : e}`); });
 
