@@ -116,7 +116,7 @@ function generateTurnCredentials(secret: string, ttlSeconds = 86400): { username
   return { username, password };
 }
 
-async function ensureStreamer(cdpPort: number): Promise<void> {
+async function ensureStreamer(): Promise<void> {
   if (streamerProcess && !streamerProcess.killed) {
     try {
       const resp = await fetch(`${STREAMER_API_BASE}/health`, { signal: AbortSignal.timeout(2000) });
@@ -129,7 +129,9 @@ async function ensureStreamer(cdpPort: number): Promise<void> {
   const bin = findStreamerBinary();
   if (!bin) throw new Error("bb-viewer binary not found");
 
-  const args = ["--api-only", "--cdp-port", String(cdpPort), "--port", STREAMER_PORT];
+  // Streamer no longer needs --cdp-port; daemon provides CDP WebSocket URLs
+  // via the /command endpoint.
+  const args = ["--api-only", "--port", STREAMER_PORT];
 
   const turnUrl = process.env.TURN_URL;
   const turnSecret = process.env.TURN_SECRET;
@@ -723,30 +725,23 @@ export class HubBridge {
       const input = decodeInput(inv.input);
       let result: unknown;
 
-      // view.* commands → streamer sidecar (HTTP)
+      // view.* commands → streamer sidecar (Protocol 2: /command)
       if (clipName === BROWSER_CLIP_ALIAS && command === "view.start") {
-        await ensureStreamer(this.cdpPort);
-        result = await streamerCommand("/peer/create");
+        await ensureStreamer();
+        const cdpUrl = await this.getCurrentTabCdpUrl();
+        result = await streamerCommand("/command", {
+          method: "connect",
+          params: { cdpUrl },
+        });
       } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.answer") {
-        result = await streamerCommand("/peer/answer", input);
+        result = await streamerCommand("/command", {
+          method: "answer",
+          params: input,
+        });
       } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.close") {
-        result = await streamerCommand("/peer/close");
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.tab_list") {
-        result = await streamerCommand("/tab/list");
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.tab_switch") {
-        result = await streamerCommand("/tab/switch", { id: (input as any).id });
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.tab_new") {
-        result = await streamerCommand("/tab/new");
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.tab_close") {
-        result = await streamerCommand("/tab/close", { id: (input as any).id });
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.navigate") {
-        result = await streamerCommand("/navigate", { url: (input as any).url });
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.back") {
-        result = await streamerCommand("/back");
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.forward") {
-        result = await streamerCommand("/forward");
-      } else if (clipName === BROWSER_CLIP_ALIAS && command === "view.reload") {
-        result = await streamerCommand("/reload");
+        result = await streamerCommand("/command", {
+          method: "stop",
+        });
       } else if (clipName === BROWSER_CLIP_ALIAS) {
         // Browser commands — dispatch directly via CDP (no HTTP round-trip!)
         result = await this.executeBrowserCommand(command, input);
@@ -761,6 +756,28 @@ export class HubBridge {
     } catch (err) {
       this.send(queue, requestId, undefined, err);
     }
+  }
+
+  /**
+   * Build the CDP WebSocket URL for the current (or first) page target.
+   * Used by view.start to tell the streamer which tab to connect to.
+   */
+  private async getCurrentTabCdpUrl(): Promise<string> {
+    if (!this.cdp.connected) {
+      await Promise.race([
+        this.cdp.waitUntilReady(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("CDP connection timeout")), COMMAND_TIMEOUT),
+        ),
+      ]);
+    }
+    const targets = await this.cdp.getTargets();
+    const current = this.cdp.currentTargetId
+      ? targets.find((t) => t.id === this.cdp.currentTargetId && t.type === "page")
+      : undefined;
+    const page = current ?? targets.find((t) => t.type === "page");
+    if (!page) throw new Error("No page target found for streamer");
+    return `ws://${this.cdp.host}:${this.cdp.port}/devtools/page/${page.id}`;
   }
 
   /**
