@@ -13,8 +13,6 @@ import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 import { homedir } from "node:os";
 import { statSync, readdirSync as readdirSyncNative, unlinkSync } from "node:fs";
-import type { z } from "zod";
-
 import { create } from "@bufbuild/protobuf";
 import { createClient, type CallOptions } from "@connectrpc/connect";
 import { createGrpcTransport } from "@connectrpc/connect-node";
@@ -38,7 +36,7 @@ import {
 // import directly from the gen file via relative path to node_modules.
 import { GetClipWebResultSchema, type GetClipWebCommand } from "../../../node_modules/@pinixai/hub-client/src/gen/hub_pb.ts";
 
-import { COMMANDS } from "@bb-browser/shared";
+import { COMMANDS, commandToJsonSchema } from "@bb-browser/shared";
 import { COMMAND_TIMEOUT } from "@bb-browser/shared";
 import type { Request } from "@bb-browser/shared";
 import { DAEMON_DIR as SHARED_DAEMON_DIR } from "@bb-browser/shared";
@@ -194,54 +192,6 @@ export function stopStreamer(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Zod -> JSON Schema (lightweight)
-// ---------------------------------------------------------------------------
-
-function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  return convertZodType(schema);
-}
-
-function convertZodType(schema: z.ZodTypeAny): Record<string, unknown> {
-  const def = (schema as any)._def;
-  const typeName: string = def?.typeName ?? "";
-  if (typeName === "ZodOptional" || typeName === "ZodNullable") {
-    const inner = convertZodType(def.innerType);
-    if (def.description && !inner.description) inner.description = def.description;
-    return inner;
-  }
-  if (typeName === "ZodDefault") {
-    const inner = convertZodType(def.innerType);
-    inner.default = def.defaultValue();
-    if (def.description && !inner.description) inner.description = def.description;
-    return inner;
-  }
-  if (typeName === "ZodEffects") return convertZodType(def.schema);
-  const base: Record<string, unknown> = {};
-  if (def?.description) base.description = def.description;
-  if (typeName === "ZodObject") {
-    const shape = def.shape?.() ?? {};
-    const properties: Record<string, unknown> = {};
-    const required: string[] = [];
-    for (const [key, value] of Object.entries(shape)) {
-      properties[key] = convertZodType(value as z.ZodTypeAny);
-      const innerDef = (value as any)._def;
-      const innerTypeName: string = innerDef?.typeName ?? "";
-      if (innerTypeName !== "ZodOptional" && innerTypeName !== "ZodDefault") required.push(key);
-    }
-    return { ...base, type: "object", properties, ...(required.length > 0 ? { required } : {}), additionalProperties: true };
-  }
-  if (typeName === "ZodString") return { ...base, type: "string" };
-  if (typeName === "ZodNumber") return { ...base, type: "number" };
-  if (typeName === "ZodBoolean") return { ...base, type: "boolean" };
-  if (typeName === "ZodEnum") return { ...base, type: "string", enum: def.values };
-  if (typeName === "ZodLiteral") return { ...base, const: def.value };
-  if (typeName === "ZodUnion") return { ...base, oneOf: (def.options as z.ZodTypeAny[]).map(convertZodType) };
-  if (typeName === "ZodArray") return { ...base, type: "array", items: convertZodType(def.type) };
-  if (typeName === "ZodRecord") return { ...base, type: "object", additionalProperties: convertZodType(def.valueType) };
-  return { ...base, type: "object", additionalProperties: true };
-}
-
-// ---------------------------------------------------------------------------
 // Site adapter scanning
 // ---------------------------------------------------------------------------
 
@@ -338,7 +288,7 @@ function buildPlatformClips(): PlatformClip[] {
 // Build clip registrations
 // ---------------------------------------------------------------------------
 
-const BROWSER_COMMANDS = COMMANDS.filter((c) => c.category !== "site");
+const BROWSER_COMMANDS = COMMANDS.filter((c) => c.group !== "site");
 
 const STREAM_COMMANDS = [
   {
@@ -387,7 +337,7 @@ const STREAM_COMMANDS = [
 ];
 
 const BROWSER_COMMAND_NAMES = [
-  ...BROWSER_COMMANDS.map((c) => c.name),
+  ...BROWSER_COMMANDS.map((c) => c.method),
   "stream.start",
   "stream.answer",
   "stream.close",
@@ -397,9 +347,9 @@ const BROWSER_COMMAND_NAMES = [
 function buildClipRegistrations() {
   const browserCommands = [
     ...BROWSER_COMMANDS.map((cmd) => ({
-      name: cmd.name,
+      name: cmd.method,
       description: cmd.description,
-      input: JSON.stringify(zodToJsonSchema(cmd.args)),
+      input: commandToJsonSchema(cmd),
       output: JSON.stringify({ type: "object", additionalProperties: true }),
     })),
     ...STREAM_COMMANDS.map((cmd) => ({
@@ -828,7 +778,7 @@ export class HubBridge {
    * had to HTTP POST to the daemon.
    */
   private async executeBrowserCommand(cmdName: string, input: InputObject): Promise<unknown> {
-    const cmd = BROWSER_COMMANDS.find((c) => c.name === cmdName);
+    const cmd = BROWSER_COMMANDS.find((c) => c.method === cmdName);
     if (!cmd) throw new Error(`Unknown browser command: ${cmdName}`);
 
     // Wait for CDP to be ready
@@ -843,7 +793,7 @@ export class HubBridge {
 
     const { tab, ...rest } = input;
     const request: Request = {
-      method: cmd.action as Request["method"],
+      method: cmd.method as Request["method"],
       ...rest,
       ...(tab !== undefined ? { tabId: tab } : {}),
     } as Request;

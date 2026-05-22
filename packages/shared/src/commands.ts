@@ -1,27 +1,35 @@
 /**
  * Unified command registry — single source of truth for all bb-browser commands.
  *
- * CLI and Edge Clip can auto-generate their interfaces from this registry.
+ * Every consumer (CLI, daemon dispatch, Hub registration) reads from this file.
  * This module is metadata only — it does not execute anything.
  */
-
-import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+export interface ParamDef {
+  type: "string" | "number" | "boolean";
+  required?: boolean;
+  /** CLI positional arg index (0-based). Omit for flag-only params. */
+  position?: number;
+  description: string;
+  default?: string | number | boolean;
+}
+
 export interface CommandDef {
-  /** Human-readable name (e.g. "snapshot", "click") */
-  name: string;
-  /** Maps to command-dispatch case (e.g. "snapshot", "click") */
-  action: string;
+  /** Protocol method name (e.g. "snap", "open") */
+  method: string;
+  /** Command group */
+  group: "navigate" | "observe" | "interact" | "tab" | "frame" | "site" | "debug";
   /** One-line description */
   description: string;
-  /** Command category */
-  category: "navigate" | "interact" | "observe" | "tab" | "network" | "site" | "system";
-  /** Zod schema for arguments */
-  args: z.ZodObject<any>;
+  /** Whether --tab is required (CLI enforcement) */
+  requiresTab: boolean;
+  /** Parameter definitions (tab is included where applicable) */
+  params: Record<string, ParamDef>;
+  // result schema is NOT needed here — it's daemon's concern
 }
 
 // ---------------------------------------------------------------------------
@@ -33,363 +41,313 @@ export const COMMANDS: CommandDef[] = [
   // Navigate
   // ---------------------------------------------------------------------------
   {
-    name: "open",
-    action: "open",
+    method: "open", group: "navigate",
     description: "Navigate to a URL. Opens in a new tab if no tab is specified.",
-    category: "navigate",
-    args: z.object({
-      url: z.string().describe("URL to open"),
-      tab: z.string().optional().describe("Tab short ID to navigate in (omit to open in a new tab)"),
-    }),
+    requiresTab: false,
+    params: {
+      url: { type: "string", required: true, position: 0, description: "URL to open" },
+      tab: { type: "string", required: false, description: "Tab short ID to navigate in (omit to open in a new tab)" },
+    },
   },
   {
-    name: "back",
-    action: "back",
+    method: "back", group: "navigate",
     description: "Navigate back in browser history",
-    category: "navigate",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "forward",
-    action: "forward",
+    method: "forward", group: "navigate",
     description: "Navigate forward in browser history",
-    category: "navigate",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "reload",
-    action: "reload",
+    method: "reload", group: "navigate",
     description: "Reload the current page",
-    category: "navigate",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "close",
-    action: "close",
+    method: "close", group: "navigate",
     description: "Close the current tab",
-    category: "navigate",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
 
   // ---------------------------------------------------------------------------
   // Observe
   // ---------------------------------------------------------------------------
   {
-    name: "snap",
-    action: "snap",
+    method: "snap", group: "observe",
     description: "Get accessibility tree snapshot of the current page. Returns ref numbers for interactive elements.",
-    category: "observe",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-      interactive: z.boolean().optional().describe("Only show interactive elements"),
-      compact: z.boolean().optional().describe("Remove empty structural nodes for a more concise tree"),
-      maxDepth: z.number().optional().describe("Limit tree depth"),
-      selector: z.string().optional().describe("CSS selector to filter the snapshot scope"),
-    }),
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+      interactive: { type: "boolean", required: false, description: "Only show interactive elements" },
+      compact: { type: "boolean", required: false, description: "Remove empty structural nodes for a more concise tree" },
+      maxDepth: { type: "number", required: false, description: "Limit tree depth" },
+      selector: { type: "string", required: false, description: "CSS selector to filter the snapshot scope" },
+    },
   },
   {
-    name: "screenshot",
-    action: "screenshot",
+    method: "screenshot", group: "observe",
     description: "Take a screenshot of the current page and return it as a PNG data URL",
-    category: "observe",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "get",
-    action: "get",
+    method: "get", group: "observe",
     description: "Get element text, attribute, or page-level values (url, title)",
-    category: "observe",
-    args: z.object({
-      attribute: z.enum(["text", "url", "title", "value", "html"]).describe("Attribute to retrieve"),
-      ref: z.string().optional().describe("Element ref from snapshot (optional for url/title)"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      attribute: { type: "string", required: true, position: 0, description: "Attribute to retrieve (text/url/title/value/html)" },
+      ref: { type: "string", required: false, description: "Element ref from snapshot (optional for url/title)" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
+  },
+  {
+    method: "eval", group: "observe",
+    description: "Execute JavaScript in the page context and return the result",
+    requiresTab: true,
+    params: {
+      script: { type: "string", required: true, position: 0, description: "JavaScript source to execute" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
 
   // ---------------------------------------------------------------------------
   // Interact
   // ---------------------------------------------------------------------------
   {
-    name: "click",
-    action: "click",
+    method: "click", group: "interact",
     description: "Click an element by ref number from snapshot",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "hover",
-    action: "hover",
+    method: "hover", group: "interact",
     description: "Hover over an element by ref number from snapshot",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "fill",
-    action: "fill",
+    method: "fill", group: "interact",
     description: "Clear an input field and fill it with new text",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      text: z.string().describe("Text to fill"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      text: { type: "string", required: true, position: 1, description: "Text to fill" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "type",
-    action: "type",
+    method: "type", group: "interact",
     description: "Type text into an input field without clearing existing content",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      text: z.string().describe("Text to type"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      text: { type: "string", required: true, position: 1, description: "Text to type" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "check",
-    action: "check",
+    method: "check", group: "interact",
     description: "Check a checkbox element",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "uncheck",
-    action: "uncheck",
+    method: "uncheck", group: "interact",
     description: "Uncheck a checkbox element",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "select",
-    action: "select",
+    method: "select", group: "interact",
     description: "Select a value from a dropdown (select element)",
-    category: "interact",
-    args: z.object({
-      ref: z.string().describe("Element ref from snapshot"),
-      value: z.string().describe("Option value to select"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      ref: { type: "string", required: true, position: 0, description: "Element ref from snapshot" },
+      value: { type: "string", required: true, position: 1, description: "Option value to select" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "press",
-    action: "press",
+    method: "press", group: "interact",
     description: "Press a keyboard key (e.g. Enter, Tab, Control+a)",
-    category: "interact",
-    args: z.object({
-      key: z.string().describe("Key name to press, e.g. Enter or Control+a"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      key: { type: "string", required: true, position: 0, description: "Key name to press, e.g. Enter or Control+a" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "scroll",
-    action: "scroll",
+    method: "scroll", group: "interact",
     description: "Scroll the page in a given direction",
-    category: "interact",
-    args: z.object({
-      direction: z.enum(["up", "down", "left", "right"]).describe("Scroll direction"),
-      pixels: z.number().default(300).describe("Scroll distance in pixels"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
-  },
-  {
-    name: "eval",
-    action: "eval",
-    description: "Execute JavaScript in the page context and return the result",
-    category: "interact",
-    args: z.object({
-      script: z.string().describe("JavaScript source to execute"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
-  },
-
-  // ---------------------------------------------------------------------------
-  // System
-  // ---------------------------------------------------------------------------
-  {
-    name: "dialog",
-    action: "dialog",
-    description: "Arm a handler for the next browser dialog (alert, confirm, prompt, beforeunload)",
-    category: "system",
-    args: z.object({
-      dialogResponse: z.enum(["accept", "dismiss"]).default("accept").describe("How to respond to the dialog"),
-      promptText: z.string().optional().describe("Text to enter in a prompt dialog (optional, used with accept)"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
-  },
-  {
-    name: "frame",
-    action: "frame",
-    description: "Switch context to an iframe by CSS selector",
-    category: "system",
-    args: z.object({
-      selector: z.string().describe("CSS selector for the iframe element"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
-  },
-  {
-    name: "frame_main",
-    action: "frame_main",
-    description: "Switch context back to the main frame",
-    category: "system",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    requiresTab: true,
+    params: {
+      direction: { type: "string", required: true, position: 0, description: "Scroll direction (up/down/left/right)" },
+      pixels: { type: "number", required: false, description: "Scroll distance in pixels", default: 300 },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
 
   // ---------------------------------------------------------------------------
   // Tab
   // ---------------------------------------------------------------------------
   {
-    name: "tab_list",
-    action: "tab_list",
+    method: "tab_list", group: "tab",
     description: "List all open browser tabs with their URLs, titles, and short IDs",
-    category: "tab",
-    args: z.object({}),
+    requiresTab: false,
+    params: {},
   },
   {
-    name: "tab_new",
-    action: "tab_new",
+    method: "tab_new", group: "tab",
     description: "Open a new browser tab, optionally navigating to a URL",
-    category: "tab",
-    args: z.object({
-      url: z.string().optional().describe("URL to open in the new tab (defaults to about:blank)"),
-    }),
+    requiresTab: false,
+    params: {
+      url: { type: "string", required: false, position: 0, description: "URL to open in the new tab (defaults to about:blank)" },
+    },
   },
-
 
   // ---------------------------------------------------------------------------
-  // Network / observation
+  // Frame
   // ---------------------------------------------------------------------------
   {
-    name: "network",
-    action: "network",
-    description: "Inspect or manage network activity. Supports incremental queries with since.",
-    category: "network",
-    args: z.object({
-      networkCommand: z.enum(["requests", "route", "unroute", "clear"]).default("requests").describe("Network sub-command"),
-      filter: z.string().optional().describe("URL substring filter for requests"),
-      since: z.union([z.literal("last_action"), z.number()]).optional().describe("Incremental query: 'last_action' for events since last operation, or a seq number"),
-      method: z.string().optional().describe("Filter by HTTP method (GET, POST, etc.)"),
-      status: z.string().optional().describe("Filter by status: '4xx', '5xx', or exact code like '200'"),
-      limit: z.number().optional().describe("Max number of results to return"),
-      withBody: z.boolean().optional().describe("Include request and response bodies"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    method: "frame", group: "frame",
+    description: "Switch context to an iframe by CSS selector",
+    requiresTab: true,
+    params: {
+      selector: { type: "string", required: true, position: 0, description: "CSS selector for the iframe element" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "console",
-    action: "console",
-    description: "Get or clear console messages from the page",
-    category: "network",
-    args: z.object({
-      consoleCommand: z.enum(["get", "clear"]).default("get").describe("Console sub-command"),
-      filter: z.string().optional().describe("Filter console messages by text substring"),
-      since: z.union([z.literal("last_action"), z.number()]).optional().describe("Incremental query: 'last_action' for events since last operation, or a seq number"),
-      limit: z.number().optional().describe("Max number of results to return"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    method: "frame_main", group: "frame",
+    description: "Switch context back to the main frame",
+    requiresTab: true,
+    params: {
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "errors",
-    action: "errors",
-    description: "Get or clear JavaScript errors from the page",
-    category: "network",
-    args: z.object({
-      errorsCommand: z.enum(["get", "clear"]).default("get").describe("Errors sub-command"),
-      filter: z.string().optional().describe("Filter errors by text substring"),
-      since: z.union([z.literal("last_action"), z.number()]).optional().describe("Incremental query: 'last_action' for events since last operation, or a seq number"),
-      limit: z.number().optional().describe("Max number of results to return"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
+    method: "dialog", group: "frame",
+    description: "Arm a handler for the next browser dialog (alert, confirm, prompt, beforeunload)",
+    requiresTab: true,
+    params: {
+      dialogResponse: { type: "string", required: true, position: 0, description: "How to respond: accept or dismiss", default: "accept" },
+      promptText: { type: "string", required: false, description: "Text to enter in a prompt dialog (optional, used with accept)" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
-  {
-    name: "trace",
-    action: "trace",
-    description: "Record user interactions for replay or code generation",
-    category: "network",
-    args: z.object({
-      traceCommand: z.enum(["start", "stop", "status"]).describe("Trace sub-command"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
-  },
-
 
   // ---------------------------------------------------------------------------
   // Site
   // ---------------------------------------------------------------------------
   {
-    name: "site_list",
-    action: "site_list",
+    method: "site_list", group: "site",
     description: "List all available site adapters",
-    category: "site",
-    args: z.object({}),
+    requiresTab: false,
+    params: {},
   },
   {
-    name: "site_search",
-    action: "site_search",
+    method: "site_search", group: "site",
     description: "Search site adapters by name, description, or domain",
-    category: "site",
-    args: z.object({
-      query: z.string().describe("Search query"),
-    }),
+    requiresTab: false,
+    params: {
+      query: { type: "string", required: true, position: 0, description: "Search query" },
+    },
   },
   {
-    name: "site_info",
-    action: "site_info",
+    method: "site_info", group: "site",
     description: "Show detailed metadata for a site adapter",
-    category: "site",
-    args: z.object({
-      name: z.string().describe("Adapter name (e.g. reddit/thread)"),
-    }),
+    requiresTab: false,
+    params: {
+      siteName: { type: "string", required: true, position: 0, description: "Adapter name (e.g. reddit/thread)" },
+    },
   },
   {
-    name: "site_recommend",
-    action: "site_recommend",
-    description: "Recommend site adapters based on browsing history",
-    category: "site",
-    args: z.object({
-      days: z.number().default(30).describe("Number of days of history to analyze"),
-    }),
-  },
-  {
-    name: "site_run",
-    action: "site_run",
+    method: "site_run", group: "site",
     description: "Run a site adapter to extract structured data from a website",
-    category: "site",
-    args: z.object({
-      name: z.string().describe("Adapter name (e.g. reddit/thread, twitter/user)"),
-      args: z.string().optional().describe("Arguments to pass to the adapter (space-separated or --flag value)"),
-      tab: z.string().optional().describe("Tab short ID (auto-detected from adapter domain if omitted)"),
-    }),
+    requiresTab: false,
+    params: {
+      siteName: { type: "string", required: true, position: 0, description: "Adapter name (e.g. reddit/thread, twitter/user)" },
+      tab: { type: "string", required: false, description: "Tab short ID (auto-detected from adapter domain if omitted)" },
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Debug
+  // ---------------------------------------------------------------------------
+  {
+    method: "network", group: "debug",
+    description: "Inspect or manage network activity. Supports incremental queries with since.",
+    requiresTab: true,
+    params: {
+      networkCommand: { type: "string", required: false, position: 0, description: "Network sub-command (requests/route/unroute/clear)", default: "requests" },
+      filter: { type: "string", required: false, description: "URL substring filter for requests" },
+      since: { type: "string", required: false, description: "Incremental query: 'last_action' for events since last operation, or a seq number" },
+      method: { type: "string", required: false, description: "Filter by HTTP method (GET, POST, etc.)" },
+      status: { type: "string", required: false, description: "Filter by status: '4xx', '5xx', or exact code like '200'" },
+      limit: { type: "number", required: false, description: "Max number of results to return" },
+      withBody: { type: "boolean", required: false, description: "Include request and response bodies" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
   {
-    name: "site_update",
-    action: "site_update",
-    description: "Update community site adapter library (git clone/pull)",
-    category: "site",
-    args: z.object({}),
+    method: "console", group: "debug",
+    description: "Get or clear console messages from the page",
+    requiresTab: true,
+    params: {
+      consoleCommand: { type: "string", required: false, description: "Console sub-command (get or clear)", default: "get" },
+      filter: { type: "string", required: false, description: "Filter console messages by text substring" },
+      since: { type: "string", required: false, description: "Incremental query: 'last_action' for events since last operation, or a seq number" },
+      limit: { type: "number", required: false, description: "Max number of results to return" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
+  },
+  {
+    method: "errors", group: "debug",
+    description: "Get or clear JavaScript errors from the page",
+    requiresTab: true,
+    params: {
+      errorsCommand: { type: "string", required: false, description: "Errors sub-command (get or clear)", default: "get" },
+      filter: { type: "string", required: false, description: "Filter errors by text substring" },
+      since: { type: "string", required: false, description: "Incremental query: 'last_action' for events since last operation, or a seq number" },
+      limit: { type: "number", required: false, description: "Max number of results to return" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
+  },
+  {
+    method: "trace", group: "debug",
+    description: "Record user interactions for replay or code generation",
+    requiresTab: true,
+    params: {
+      traceCommand: { type: "string", required: true, position: 0, description: "Trace sub-command (start/stop/status)" },
+      tab: { type: "string", required: true, description: "Tab short ID" },
+    },
   },
 ];
 
@@ -397,12 +355,34 @@ export const COMMANDS: CommandDef[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Find a command definition by its action name. */
-export function findCommand(action: string): CommandDef | undefined {
-  return COMMANDS.find((c) => c.action === action);
+/**
+ * Convert ParamDef record to JSON Schema string for Hub registration.
+ * The `tab` param is excluded — Hub handles tab routing separately.
+ */
+export function commandToJsonSchema(cmd: CommandDef): string {
+  const properties: Record<string, Record<string, unknown>> = {};
+  const required: string[] = [];
+  for (const [name, def] of Object.entries(cmd.params)) {
+    if (name === "tab") continue; // tab is handled separately by Hub
+    const prop: Record<string, unknown> = { type: def.type, description: def.description };
+    if (def.default !== undefined) prop.default = def.default;
+    properties[name] = prop;
+    if (def.required) required.push(name);
+  }
+  return JSON.stringify({
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+    additionalProperties: true,
+  });
 }
 
-/** Get all commands in a given category. */
-export function getCommandsByCategory(category: CommandDef["category"]): CommandDef[] {
-  return COMMANDS.filter((c) => c.category === category);
+/** Find a command definition by its method name. */
+export function getCommand(method: string): CommandDef | undefined {
+  return COMMANDS.find((c) => c.method === method);
+}
+
+/** Get all commands in a given group. */
+export function getCommandsByGroup(group: CommandDef["group"]): CommandDef[] {
+  return COMMANDS.filter((c) => c.group === group);
 }

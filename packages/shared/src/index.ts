@@ -31,9 +31,11 @@ export {
 
 export {
   type CommandDef,
+  type ParamDef,
   COMMANDS,
-  findCommand,
-  getCommandsByCategory,
+  commandToJsonSchema,
+  getCommand,
+  getCommandsByGroup,
 } from "./commands.js";
 
 export {
