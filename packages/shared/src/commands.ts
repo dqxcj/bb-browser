@@ -1,7 +1,7 @@
 /**
  * Unified command registry — single source of truth for all bb-browser commands.
  *
- * CLI, MCP, and Edge Clip can auto-generate their interfaces from this registry.
+ * CLI and Edge Clip can auto-generate their interfaces from this registry.
  * This module is metadata only — it does not execute anything.
  */
 

@@ -6,7 +6,7 @@
  *   - #118: daemon exits immediately
  *
  * Root cause: daemon-manager.ts spawns daemon without passing CDP info,
- * daemon's own discoverCdpPort only tries port 19825 + managed port file,
+ * daemon's own discoverCdpPort only tries port 9222 + managed port file,
  * does NOT auto-launch Chrome. CLI's cdp-discovery.ts has full 6-level
  * discovery (including auto-launch) but daemon never uses it.
  *
@@ -313,9 +313,9 @@ describe("core bug: daemon spawned without --cdp-port fails silently (#136)", ()
     cleanupDaemonJson();
   });
 
-  it("daemon with default port 19825 and nothing listening → exits, no daemon.json", async () => {
+  it("daemon with default port 9222 and nothing listening → exits, no daemon.json", async () => {
     // This is exactly what ensureDaemon() does: spawn daemon with NO args
-    // Default --cdp-port is 19825, nothing listening there → daemon exits
+    // Default --cdp-port is 9222, nothing listening there → daemon exits
     const child = spawn(TSX, [DAEMON_ENTRY], {
       detached: true,
       stdio: "ignore",

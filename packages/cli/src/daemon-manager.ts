@@ -103,7 +103,7 @@ export async function ensureDaemon(): Promise<void> {
       "bb-browser: Cannot find a Chromium-based browser.\n\n" +
       "Please do one of the following:\n" +
       "  1. Install Google Chrome, Edge, or Brave\n" +
-      "  2. Start Chrome with: google-chrome --remote-debugging-port=19825\n" +
+      "  2. Start Chrome with: google-chrome --remote-debugging-port=9222\n" +
       "  3. Set BB_BROWSER_CDP_URL=http://host:port",
     );
   }

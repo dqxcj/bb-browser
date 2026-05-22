@@ -1,7 +1,7 @@
 /**
  * Shared daemon HTTP client utilities.
  *
- * Used by CLI (daemon-manager), MCP server, and Edge Clip provider
+ * Used by CLI (daemon-manager) and Edge Clip provider
  * to communicate with the bb-browser daemon process.
  */
 
