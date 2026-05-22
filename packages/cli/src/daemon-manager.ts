@@ -110,7 +110,17 @@ export async function ensureDaemon(): Promise<void> {
 
   // Spawn daemon process with discovered CDP endpoint
   const daemonPath = getDaemonPath();
-  const child = spawn(process.execPath, [daemonPath, "--cdp-host", cdpInfo.host, "--cdp-port", String(cdpInfo.port)], {
+  const daemonArgs = [daemonPath, "--cdp-host", cdpInfo.host, "--cdp-port", String(cdpInfo.port)];
+
+  // Forward --hub flags from environment variables
+  const hubUrl = process.env.BB_BROWSER_HUB_URL || process.env.PINIX_HUB_URL;
+  const hubToken = process.env.BB_BROWSER_HUB_TOKEN || process.env.PINIX_HUB_TOKEN || process.env.PINIX_TOKEN;
+  if (hubUrl) {
+    daemonArgs.push("--hub", hubUrl);
+    if (hubToken) daemonArgs.push("--hub-token", hubToken);
+  }
+
+  const child = spawn(process.execPath, daemonArgs, {
     detached: true,
     stdio: "ignore",
   });

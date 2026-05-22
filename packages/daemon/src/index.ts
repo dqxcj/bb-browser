@@ -19,6 +19,7 @@ import { DAEMON_PORT, DAEMON_HOST } from "@bb-browser/shared";
 import { HttpServer } from "./http-server.js";
 import { CdpConnection } from "./cdp-connection.js";
 import { TabStateManager } from "./tab-state.js";
+import { HubBridge } from "./hub-bridge.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,6 +39,8 @@ interface DaemonOptions {
   cdpHost: string;
   cdpPort: number;
   token: string;
+  hubUrl?: string;
+  hubToken?: string;
 }
 
 function parseOptions(): DaemonOptions {
@@ -66,6 +69,14 @@ function parseOptions(): DaemonOptions {
         type: "string",
         default: "",
       },
+      hub: {
+        type: "string",
+        default: "",
+      },
+      "hub-token": {
+        type: "string",
+        default: "",
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -87,12 +98,19 @@ Options:
       --cdp-host <host>      Chrome CDP host (default: 127.0.0.1)
       --cdp-port <port>      Chrome CDP port (default: ${DEFAULT_CDP_PORT})
       --token <token>        Bearer auth token (auto-generated if empty)
+      --hub <url>            Pinix Hub gRPC URL (enables Hub mode)
+      --hub-token <token>    Pinix Hub auth token
   -h, --help                 Show this help message
 
 Endpoints:
   POST /command      Send command and get result (via CDP)
   GET  /status       Daemon health + per-tab stats
   POST /shutdown     Graceful shutdown
+
+Hub mode:
+  When --hub is set, the daemon connects to Pinix Hub as an Edge Clip
+  provider, registering browser and site commands. Invokes are handled
+  directly via CDP without HTTP round-trips.
 `);
     process.exit(0);
   }
@@ -103,12 +121,26 @@ Endpoints:
     token = randomBytes(16).toString("hex");
   }
 
+  // Normalize hub URL if provided
+  let hubUrl = values.hub?.trim() || undefined;
+  if (hubUrl) {
+    hubUrl = hubUrl
+      .replace(/^ws:\/\//i, "http://")
+      .replace(/^wss:\/\//i, "https://");
+    const url = new URL(hubUrl);
+    if (url.pathname === "/ws/provider" || url.pathname === "/ws/capability") url.pathname = "";
+    url.search = ""; url.hash = "";
+    hubUrl = url.toString().replace(/\/$/, "");
+  }
+
   return {
     host: values.host ?? DAEMON_HOST,
     port: parseInt(values.port ?? String(DAEMON_PORT), 10),
     cdpHost: values["cdp-host"] ?? "127.0.0.1",
     cdpPort: parseInt(values["cdp-port"] ?? String(DEFAULT_CDP_PORT), 10),
     token,
+    hubUrl,
+    hubToken: values["hub-token"]?.trim() || undefined,
   };
 }
 
@@ -212,12 +244,19 @@ async function main(): Promise<void> {
 
   const cdp = new CdpConnection(cdpEndpoint.host, cdpEndpoint.port, tabManager);
 
+  // Hub bridge (created after CDP, started after CDP connects)
+  let hubBridge: HubBridge | null = null;
+
   // Graceful shutdown handler (guarded against double-call)
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.error("[Daemon] Shutting down...");
+    if (hubBridge) {
+      hubBridge.stop();
+      hubBridge = null;
+    }
     cdp.disconnect();
     await httpServer.stop();
     cleanupDaemonJson();
@@ -269,6 +308,18 @@ async function main(): Promise<void> {
       `[Daemon] Failed to connect to CDP: ${error instanceof Error ? error.message : String(error)}`,
     );
     console.error("[Daemon] HTTP server is running, but commands will fail until CDP connects.");
+  }
+
+  // Phase 3: Start Hub bridge if --hub is set
+  if (options.hubUrl) {
+    hubBridge = new HubBridge({
+      hubUrl: options.hubUrl,
+      hubToken: options.hubToken,
+      cdp,
+      cdpPort: cdpEndpoint.port,
+    });
+    console.error(`[Daemon] Starting Hub bridge to ${options.hubUrl}`);
+    hubBridge.start();
   }
 }
 

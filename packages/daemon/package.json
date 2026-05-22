@@ -17,7 +17,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bb-browser/shared": "workspace:*"
+    "@bb-browser/shared": "workspace:*",
+    "@bufbuild/protobuf": "^2.11.0",
+    "@connectrpc/connect": "^2.1.1",
+    "@connectrpc/connect-node": "^2.1.1",
+    "@pinixai/hub-client": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
