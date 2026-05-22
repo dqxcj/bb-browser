@@ -413,12 +413,10 @@ describe("CDP 503 error includes diagnostics", () => {
       // Must not wait 30s
       assert.ok(elapsed < 10000, `should respond quickly, not wait 30s (took ${elapsed}ms)`);
 
-      // Must have diagnostics
-      assert.equal(response.success, false);
-      assert.match(response.error as string, /Chrome not connected/, "error should mention Chrome");
-      assert.ok(typeof response.reason === "string", "should include reason");
-      assert.ok((response.reason as string).length > 0, "reason should not be empty");
-      assert.ok(typeof response.hint === "string", "should include hint");
+      // Must have diagnostics (new protocol: error is {message, hint})
+      assert.ok(response.error, "should have error");
+      assert.match(response.error.message as string, /Chrome not connected/, "error should mention Chrome");
+      assert.ok(typeof response.error.hint === "string", "should include hint");
     } finally {
       await new Promise<void>(resolve => fakeCdp.close(() => resolve()));
     }

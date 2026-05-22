@@ -13,7 +13,7 @@ export function setJqExpression(expression?: string): void {
 }
 
 function printJqResults(response: Response): never {
-  const target = response.data ?? response;
+  const target = response.result ?? response;
   const results = applyJq(target, jqExpression || ".");
   for (const result of results) {
     console.log(typeof result === "string" ? result : JSON.stringify(result));

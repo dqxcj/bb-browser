@@ -61,8 +61,8 @@ export const COMMANDS: CommandDef[] = [
     }),
   },
   {
-    name: "refresh",
-    action: "refresh",
+    name: "reload",
+    action: "reload",
     description: "Reload the current page",
     category: "navigate",
     args: z.object({
@@ -83,8 +83,8 @@ export const COMMANDS: CommandDef[] = [
   // Observe
   // ---------------------------------------------------------------------------
   {
-    name: "snapshot",
-    action: "snapshot",
+    name: "snap",
+    action: "snap",
     description: "Get accessibility tree snapshot of the current page. Returns ref numbers for interactive elements.",
     category: "observe",
     args: z.object({
@@ -228,16 +228,6 @@ export const COMMANDS: CommandDef[] = [
   // System
   // ---------------------------------------------------------------------------
   {
-    name: "wait",
-    action: "wait",
-    description: "Wait for a specified number of milliseconds",
-    category: "system",
-    args: z.object({
-      ms: z.number().default(1000).describe("Time to wait in milliseconds"),
-      tab: z.string().optional().describe("Tab short ID"),
-    }),
-  },
-  {
     name: "dialog",
     action: "dialog",
     description: "Arm a handler for the next browser dialog (alert, confirm, prompt, beforeunload)",
@@ -287,26 +277,7 @@ export const COMMANDS: CommandDef[] = [
       url: z.string().optional().describe("URL to open in the new tab (defaults to about:blank)"),
     }),
   },
-  {
-    name: "tab_select",
-    action: "tab_select",
-    description: "Switch to a tab by short ID or index",
-    category: "tab",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID or full target ID"),
-      index: z.number().optional().describe("Tab index (0-based, used if tab is not specified)"),
-    }),
-  },
-  {
-    name: "tab_close",
-    action: "tab_close",
-    description: "Close a specific tab by short ID or index",
-    category: "tab",
-    args: z.object({
-      tab: z.string().optional().describe("Tab short ID or full target ID"),
-      index: z.number().optional().describe("Tab index (0-based, used if tab is not specified)"),
-    }),
-  },
+
 
   // ---------------------------------------------------------------------------
   // Network / observation
@@ -363,17 +334,7 @@ export const COMMANDS: CommandDef[] = [
       tab: z.string().optional().describe("Tab short ID"),
     }),
   },
-  {
-    name: "history",
-    action: "history",
-    description: "Search browsing history or list domains (not supported in daemon mode)",
-    category: "network",
-    args: z.object({
-      historyCommand: z.enum(["search", "domains"]).describe("History sub-command"),
-      query: z.string().optional().describe("Search query string (used with 'search' sub-command)"),
-      days: z.number().default(30).describe("Number of days to look back"),
-    }),
-  },
+
 
   // ---------------------------------------------------------------------------
   // Site

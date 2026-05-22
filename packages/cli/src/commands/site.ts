@@ -17,7 +17,7 @@
  *   ~/.bb-browser/bb-sites/    社区 adapter（bb-browser site update 拉取）
  */
 
-import { generateId, type Response } from "@bb-browser/shared";
+import type { Request, Response } from "@bb-browser/shared";
 import { handleJqResponse, sendCommand } from "../client.js";
 import { getHistoryDomains } from "../history-sqlite.js";
 import { readFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
@@ -224,20 +224,19 @@ function findLocalSiteFile(name: string): string | null {
 
 async function siteList(options: SiteOptions): Promise<void> {
   const resp: Response = await sendCommand({
-    id: generateId(),
-    action: "site_list",
-  });
+    method: "site_list",
+  } as Request);
 
-  if (!resp.success) {
+  if (resp.error) {
     if (options.json) {
-      exitJsonError(resp.error || "site_list failed");
+      exitJsonError(resp.error.message || "site_list failed");
     }
-    console.error(`[error] site list: ${resp.error || "failed"}`);
+    console.error(`[error] site list: ${resp.error.message || "failed"}`);
     process.exit(1);
   }
 
   const sites: Array<{ name: string; description: string; domain: string; source: string }> =
-    (resp.data as any)?.sites || [];
+    (resp.result as any)?.sites || [];
 
   if (sites.length === 0) {
     if (options.json) {
@@ -276,21 +275,20 @@ async function siteList(options: SiteOptions): Promise<void> {
 
 async function siteSearch(query: string, options: SiteOptions): Promise<void> {
   const resp: Response = await sendCommand({
-    id: generateId(),
-    action: "site_search",
+    method: "site_search",
     query,
-  });
+  } as Request);
 
-  if (!resp.success) {
+  if (resp.error) {
     if (options.json) {
-      exitJsonError(resp.error || "site_search failed");
+      exitJsonError(resp.error.message || "site_search failed");
     }
-    console.error(`[error] site search: ${resp.error || "failed"}`);
+    console.error(`[error] site search: ${resp.error.message || "failed"}`);
     process.exit(1);
   }
 
   const matches: Array<{ name: string; description: string; domain: string; source: string }> =
-    (resp.data as any)?.sites || [];
+    (resp.result as any)?.sites || [];
 
   if (matches.length === 0) {
     if (options.json) {
@@ -382,21 +380,20 @@ function siteUpdate(options: SiteOptions = {}): void {
 
 async function siteInfo(name: string, options: SiteOptions): Promise<void> {
   const resp: Response = await sendCommand({
-    id: generateId(),
-    action: "site_info",
+    method: "site_info",
     siteName: name,
-  });
+  } as Request);
 
-  if (!resp.success) {
+  if (resp.error) {
     if (options.json) {
-      exitJsonError(resp.error || `adapter "${name}" not found`, { action: "bb-browser site list" });
+      exitJsonError(resp.error.message || `adapter "${name}" not found`, { action: "bb-browser site list" });
     }
-    console.error(`[error] site info: ${resp.error || `adapter "${name}" not found`}.`);
+    console.error(`[error] site info: ${resp.error.message || `adapter "${name}" not found`}.`);
     console.error("  Try: bb-browser site list");
     process.exit(1);
   }
 
-  const site = resp.data as any;
+  const site = resp.result as any;
 
   if (options.json) {
     console.log(JSON.stringify({
@@ -473,7 +470,7 @@ async function siteRecommend(options: SiteOptions): Promise<void> {
   };
 
   if (options.jq) {
-    handleJqResponse({ id: generateId(), success: true, data: jsonData as any });
+    handleJqResponse({ result: jsonData as any });
   }
 
   if (options.json) {
@@ -521,11 +518,10 @@ async function siteRun(
   if (options.openclaw) {
     // Need site meta for openclaw path — fetch from daemon
     const infoResp: Response = await sendCommand({
-      id: generateId(),
-      action: "site_info",
+      method: "site_info",
       siteName: name,
-    });
-    const site = infoResp.success ? (infoResp.data as any) : null;
+    } as Request);
+    const site = infoResp.result ? (infoResp.result as any) : null;
     if (!site) {
       if (options.json) {
         exitJsonError(`site "${name}" not found`, { action: "bb-browser site list" });
@@ -603,7 +599,7 @@ async function siteRun(
       const reportHint = `If this is an adapter bug, report via: gh issue create --repo epiral/bb-sites --title "[${name}] <description>" OR: bb-browser site github/issue-create epiral/bb-sites --title "[${name}] <description>"`;
 
       if (options.json) {
-        console.log(JSON.stringify({ id: "openclaw", success: false, error: errObj.error, hint, reportHint }));
+        console.log(JSON.stringify({ error: { message: errObj.error }, hint, reportHint }));
       } else {
         console.error(`[error] site ${name}: ${errObj.error}`);
         if (hint) console.error(`  Hint: ${hint}`);
@@ -621,7 +617,7 @@ async function siteRun(
         console.log(typeof r === "string" ? r : JSON.stringify(r));
       }
     } else if (options.json) {
-      console.log(JSON.stringify({ id: "openclaw", success: true, data: parsed }));
+      console.log(JSON.stringify({ result: parsed }));
     } else {
       console.log(JSON.stringify(parsed, null, 2));
     }
@@ -633,16 +629,15 @@ async function siteRun(
   // We need arg names to map positional args → named args.
   // Fetch site meta from daemon first.
   const infoResp: Response = await sendCommand({
-    id: generateId(),
-    action: "site_info",
+    method: "site_info",
     siteName: name,
-  });
+  } as Request);
 
   // Build argMap from CLI args
   const argMap: Record<string, string> = {};
 
-  if (infoResp.success && infoResp.data) {
-    const site = infoResp.data as any;
+  if (infoResp.result) {
+    const site = infoResp.result as any;
     const argNames = Object.keys(site.args || {});
 
     const positionalArgs: string[] = [];
@@ -676,28 +671,26 @@ async function siteRun(
   }
 
   // Send site_run to daemon
-  const reqId = generateId();
   const resp: Response = await sendCommand({
-    id: reqId,
-    action: "site_run",
+    method: "site_run",
     siteName: name,
     siteArgs: argMap,
     ...(options.tabId !== undefined ? { tabId: options.tabId } : {}),
-  });
+  } as Request);
 
-  if (!resp.success) {
+  if (resp.error) {
     if (options.json) {
-      console.log(JSON.stringify({ id: reqId, success: false, error: resp.error || "site_run failed" }));
+      console.log(JSON.stringify({ error: { message: resp.error.message || "site_run failed" } }));
     } else {
-      console.error(`[error] site ${name}: ${resp.error || "site_run failed"}`);
+      console.error(`[error] site ${name}: ${resp.error.message || "site_run failed"}`);
     }
     process.exit(1);
   }
 
-  const result = resp.data?.result;
+  const result = resp.result?.result;
   if (result === undefined || result === null) {
     if (options.json) {
-      console.log(JSON.stringify({ id: reqId, success: true, data: null }));
+      console.log(JSON.stringify({ result: null }));
     } else {
       console.log("(no output)");
     }
@@ -718,7 +711,7 @@ async function siteRun(
     const checkText = `${errObj.error} ${errObj.hint || ""}`;
     const isAuthError = /401|403|unauthorized|forbidden|not.?logged|login.?required|sign.?in|auth/i.test(checkText);
     // Try to get domain from info resp
-    const domain = infoResp.success ? (infoResp.data as any)?.domain : undefined;
+    const domain = infoResp.result ? (infoResp.result as any)?.domain : undefined;
     const loginHint = isAuthError && domain
       ? `Please log in to https://${domain} in your browser first, then retry.`
       : undefined;
@@ -726,7 +719,7 @@ async function siteRun(
     const reportHint = `If this is an adapter bug, report via: gh issue create --repo epiral/bb-sites --title "[${name}] <description>" OR: bb-browser site github/issue-create epiral/bb-sites --title "[${name}] <description>"`;
 
     if (options.json) {
-      console.log(JSON.stringify({ id: reqId, success: false, error: errObj.error, hint, reportHint }));
+      console.log(JSON.stringify({ error: { message: errObj.error }, hint, reportHint }));
     } else {
       console.error(`[error] site ${name}: ${errObj.error}`);
       if (hint) console.error(`  Hint: ${hint}`);
@@ -744,7 +737,7 @@ async function siteRun(
       console.log(typeof r === "string" ? r : JSON.stringify(r));
     }
   } else if (options.json) {
-    console.log(JSON.stringify({ id: reqId, success: true, data: parsed }));
+    console.log(JSON.stringify({ result: parsed }));
   } else {
     console.log(JSON.stringify(parsed, null, 2));
   }

@@ -28,7 +28,7 @@ import {
 // import directly from the gen file via relative path to node_modules.
 import { GetClipWebResultSchema, type GetClipWebCommand } from "../node_modules/@pinixai/hub-client/src/gen/hub_pb.ts";
 import { COMMANDS } from "../packages/shared/src/commands.ts";
-import { COMMAND_TIMEOUT, generateId } from "../packages/shared/src/index.ts";
+import { COMMAND_TIMEOUT } from "../packages/shared/src/index.ts";
 import type { Request, Response } from "../packages/shared/src/protocol.ts";
 import {
   type DaemonInfo,
@@ -541,22 +541,20 @@ async function executeBrowserCommand(cmdName: string, input: InputObject): Promi
   await ensureDaemon();
   const { tab, ...rest } = input;
   const request: Request = {
-    id: generateId(),
-    action: cmd.action as Request["action"],
+    method: cmd.action as Request["method"],
     ...rest,
     ...(tab !== undefined ? { tabId: tab } : {}),
   } as Request;
   const response = await daemonCommand(request);
-  if (!response.success) throw new Error(response.error || "Command failed");
-  return response.data ?? {};
+  if (response.error) throw new Error(response.error.message || "Command failed");
+  return response.result ?? {};
 }
 
 async function executeSiteCommand(clipName: string, command: string, input: InputObject): Promise<unknown> {
   await ensureDaemon();
   const { tab, ...siteArgs } = input;
   const request: Request = {
-    id: generateId(),
-    action: "site_run" as Request["action"],
+    method: "site_run" as Request["method"],
     siteName: `${clipName}/${command}`,
     siteArgs: Object.fromEntries(
       Object.entries(siteArgs)
@@ -566,8 +564,8 @@ async function executeSiteCommand(clipName: string, command: string, input: Inpu
     ...(tab !== undefined ? { tabId: String(tab) } : {}),
   } as Request;
   const response = await daemonCommand(request);
-  if (!response.success) throw new Error(response.error || "Site command failed");
-  return response.data ?? {};
+  if (response.error) throw new Error(response.error.message || "Site command failed");
+  return response.result ?? {};
 }
 
 // ---------------------------------------------------------------------------

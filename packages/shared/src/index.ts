@@ -13,11 +13,11 @@ export {
   type Request,
   type Response,
   type ResponseData,
+  type ResponseError,
   type SnapshotData,
   type TabInfo,
   type TraceEvent,
   type TraceStatus,
-  generateId,
 } from "./protocol.js";
 
 export {

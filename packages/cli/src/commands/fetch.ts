@@ -1,17 +1,9 @@
 /**
- * fetch 命令 - 在浏览器上下文中执行 fetch()，自动处理同源路由
- *
- * 用法：
- *   bb-browser fetch <url> [options]
- *   bb-browser fetch https://www.reddit.com/api/me.json
- *   bb-browser fetch /api/me.json                     # 相对路径，用当前 tab 的 origin
- *   bb-browser fetch https://www.reddit.com/... --json
- *   bb-browser fetch https://x.com/... --method POST --body '{"query":"..."}'
- *
- * 本质：curl，但带浏览器登录态。
+ * fetch 命令 - 在浏览器上下文中执行 fetch()
+ * (DEPRECATED - use eval or site run instead)
  */
 
-import { generateId, type Request, type Response, type TabInfo } from "@bb-browser/shared";
+import type { Request, Response, TabInfo } from "@bb-browser/shared";
 import { sendCommand } from "../client.js";
 import { ensureDaemonRunning } from "../daemon-manager.js";
 
@@ -24,9 +16,6 @@ export interface FetchOptions {
   tabId?: string | number;
 }
 
-/**
- * 精确匹配 tab 的 origin
- */
 function matchTabOrigin(tabUrl: string, targetHostname: string): boolean {
   try {
     const tabHostname = new URL(tabUrl).hostname;
@@ -36,44 +25,34 @@ function matchTabOrigin(tabUrl: string, targetHostname: string): boolean {
   }
 }
 
-/**
- * 找到匹配域名的 tab，如果没有则新建
- */
 async function ensureTabForOrigin(origin: string, hostname: string): Promise<number | undefined> {
-  const listReq: Request = { id: generateId(), action: "tab_list" };
+  const listReq: Request = { method: "tab_list" };
   const listResp: Response = await sendCommand(listReq);
 
-  if (listResp.success && listResp.data?.tabs) {
-    const matchingTab = listResp.data.tabs.find((tab: TabInfo) =>
+  if (listResp.result?.tabs) {
+    const matchingTab = listResp.result.tabs.find((tab: TabInfo) =>
       matchTabOrigin(tab.url, hostname)
     );
-
     if (matchingTab) {
       return matchingTab.tabId;
     }
   }
 
-  const newResp: Response = await sendCommand({ id: generateId(), action: "tab_new", url: origin });
-  if (!newResp.success) {
-    throw new Error(`无法打开 ${origin}: ${newResp.error}`);
+  const newResp: Response = await sendCommand({ method: "tab_new", url: origin } as Request);
+  if (newResp.error) {
+    throw new Error(`无法打开 ${origin}: ${newResp.error.message}`);
   }
   await new Promise((resolve) => setTimeout(resolve, 3000));
-  return newResp.data?.tabId;
+  return newResp.result?.tabId;
 }
 
-/**
- * 构造浏览器内执行的 fetch JS 代码
- * 修复 Codex review: headers 通过 JSON.stringify 传入，不做字符串拼接
- */
 function buildFetchScript(url: string, options: FetchOptions): string {
   const method = (options.method || "GET").toUpperCase();
   const hasBody = options.body && method !== "GET" && method !== "HEAD";
 
-  // headers 通过 JSON.parse 安全传入，避免代码注入
   let headersExpr = "{}";
   if (options.headers) {
     try {
-      // 验证是合法 JSON
       JSON.parse(options.headers);
       headersExpr = options.headers;
     } catch {
@@ -140,14 +119,14 @@ export async function fetchCommand(
   }
 
   const script = buildFetchScript(url, options);
-  const evalReq: Request = { id: generateId(), action: "eval", script, tabId: targetTabId };
+  const evalReq: Request = { method: "eval", script, tabId: targetTabId };
   const evalResp: Response = await sendCommand(evalReq);
 
-  if (!evalResp.success) {
-    throw new Error(`Fetch 失败: ${evalResp.error}`);
+  if (evalResp.error) {
+    throw new Error(`Fetch 失败: ${evalResp.error.message}`);
   }
 
-  const rawResult = evalResp.data?.result;
+  const rawResult = evalResp.result?.result;
   if (rawResult === undefined || rawResult === null) {
     throw new Error("Fetch 未返回结果");
   }
@@ -164,7 +143,6 @@ export async function fetchCommand(
     throw new Error(`Fetch error: ${result.error}`);
   }
 
-  // 写文件
   if (options.output) {
     const { writeFileSync } = await import("node:fs");
     const content = typeof result.body === "object"
@@ -175,7 +153,6 @@ export async function fetchCommand(
     return;
   }
 
-  // 输出
   if (typeof result.body === "object") {
     console.log(JSON.stringify(result.body, null, 2));
   } else {

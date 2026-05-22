@@ -2,7 +2,7 @@
  * network 命令 - 网络监控和拦截
  */
 
-import { generateId, type Request } from "@bb-browser/shared";
+import type { Request } from "@bb-browser/shared";
 import { sendCommand } from "../client.js";
 
 interface NetworkOptions {
@@ -11,9 +11,9 @@ interface NetworkOptions {
   body?: string;
   withBody?: boolean;
   tabId?: string | number;
-  since?: string;        // "last_action" or a seq number
-  method?: string;       // filter by HTTP method (GET, POST, etc.)
-  status?: string;       // filter by status code (e.g. "200", "404")
+  since?: string;
+  method?: string;
+  status?: string;
 }
 
 export async function networkCommand(
@@ -21,16 +21,14 @@ export async function networkCommand(
   urlOrFilter?: string,
   options: NetworkOptions = {}
 ): Promise<void> {
-  // Parse since: if numeric string, convert to number
   let since: string | number | undefined;
   if (subCommand === "requests" && options.since) {
     const num = parseInt(options.since, 10);
     since = (!isNaN(num) && String(num) === options.since) ? num : options.since;
   }
 
-  const request: Request & { since?: string | number; method?: string; status?: string } = {
-    id: generateId(),
-    action: "network",
+  const request: Request = {
+    method: "network",
     networkCommand: subCommand as "requests" | "route" | "unroute" | "clear",
     url: subCommand === "route" || subCommand === "unroute" ? urlOrFilter : undefined,
     filter: subCommand === "requests" ? urlOrFilter : undefined,
@@ -40,10 +38,11 @@ export async function networkCommand(
     } : undefined,
     withBody: subCommand === "requests" ? options.withBody : undefined,
     since,
-    method: subCommand === "requests" ? options.method : undefined,
+    httpMethod: subCommand === "requests" ? options.method : undefined,
     status: subCommand === "requests" ? options.status : undefined,
     tabId: options.tabId,
   };
+
   const response = await sendCommand(request as Request);
 
   if (options.json) {
@@ -51,11 +50,11 @@ export async function networkCommand(
     return;
   }
 
-  if (!response.success) {
-    throw new Error(response.error || "Network command failed");
+  if (response.error) {
+    throw new Error(response.error.message || "Network command failed");
   }
 
-  const data = response.data;
+  const data = response.result;
 
   switch (subCommand) {
     case "requests": {

@@ -143,13 +143,11 @@ export class HttpServer {
           ]);
         } catch {
           const cdpTarget = `${this.cdp.host}:${this.cdp.port}`;
-          const reason = this.cdp.lastError || "unknown";
           this.sendJson(res, 503, {
-            id: request.id,
-            success: false,
-            error: `Chrome not connected (CDP at ${cdpTarget})`,
-            reason,
-            hint: "Make sure Chrome is running. Try: bb-browser daemon shutdown && bb-browser tab list",
+            error: {
+              message: `Chrome not connected (CDP at ${cdpTarget})`,
+              hint: "Make sure Chrome is running. Try: bb-browser daemon shutdown && bb-browser tab list",
+            },
           });
           return;
         }
@@ -166,8 +164,9 @@ export class HttpServer {
       this.sendJson(res, 200, response);
     } catch (error) {
       this.sendJson(res, 400, {
-        success: false,
-        error: error instanceof Error ? error.message : "Invalid request",
+        error: {
+          message: error instanceof Error ? error.message : "Invalid request",
+        },
       });
     }
   }

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 /**
  * bb-browser 通信协议 — CLI ↔ Daemon ↔ Chrome CDP
  */
@@ -7,7 +5,7 @@ import { randomUUID } from "node:crypto";
 /** 支持的操作类型 */
 export type ActionType =
   | "open"
-  | "snapshot"
+  | "snap"
   | "click"
   | "hover"
   | "fill"
@@ -18,17 +16,14 @@ export type ActionType =
   | "get"
   | "screenshot"
   | "close"
-  | "wait"
   | "press"
   | "scroll"
   | "back"
   | "forward"
-  | "refresh"
+  | "reload"
   | "eval"
   | "tab_list"
   | "tab_new"
-  | "tab_select"
-  | "tab_close"
   | "frame"
   | "frame_main"
   | "dialog"
@@ -36,7 +31,6 @@ export type ActionType =
   | "console"
   | "errors"
   | "trace"
-  | "history"
   | "site_run"
   | "site_list"
   | "site_info"
@@ -44,10 +38,8 @@ export type ActionType =
 
 /** 请求类型 */
 export interface Request {
-  /** 请求唯一标识 */
-  id: string;
   /** 操作类型 */
-  action: ActionType;
+  method: ActionType;
   /** 目标 URL（open 操作时必填） */
   url?: string;
   /** 元素引用（click, fill, get 操作时使用） */
@@ -68,9 +60,9 @@ export interface Request {
   script?: string;
   /** 选项值（select 命令使用） */
   value?: string;
-  /** 标签页索引（tab_select, tab_close 命令使用） */
+  /** 标签页索引（tab 命令使用） */
   index?: number;
-  /** 标签页 ID（tab_select, tab_close 命令使用，优先于 index） */
+  /** 标签页 ID（tab 命令使用，优先于 index） */
   tabId?: number | string;
   /** CSS 选择器（frame 命令使用，定位 iframe） */
   selector?: string;
@@ -97,8 +89,6 @@ export interface Request {
   errorsCommand?: "get" | "clear";
   /** trace 子命令：start, stop, status */
   traceCommand?: "start" | "stop" | "status";
-  /** history 子命令：search, domains */
-  historyCommand?: "search" | "domains";
   /** 按键名（press 命令使用） */
   key?: string;
   /** 修饰键列表（press 命令使用） */
@@ -107,14 +97,10 @@ export interface Request {
   direction?: string;
   /** 滚动距离（scroll 命令使用） */
   pixels?: number;
-  /** 等待类型（wait 命令使用） */
-  waitType?: string;
-  /** 等待毫秒数（wait 命令使用） */
-  ms?: number;
   /** 增量查询起点（observation 命令使用，支持 seq 数值或 "last_action"） */
   since?: number | "last_action";
   /** HTTP 方法过滤（network requests 使用） */
-  method?: string;
+  httpMethod?: string;
   /** HTTP 状态码过滤（network requests 使用，支持 "4xx"/"5xx" 或具体数字） */
   status?: string;
   /** 返回条数限制（observation 命令使用） */
@@ -313,31 +299,22 @@ export interface ResponseData {
   traceEvents?: TraceEvent[];
   /** Trace 录制状态（trace status 命令返回） */
   traceStatus?: TraceStatus;
-  /** History 搜索结果 */
-  historyItems?: Array<{
-    url: string;
-    title: string;
-    visitCount: number;
-    lastVisitTime: number;
-  }>;
-  /** History 域名聚合结果 */
-  historyDomains?: Array<{
-    domain: string;
-    visits: number;
-    titles: string[];
-  }>;
 }
 
-/** 响应类型 */
+/** 错误信息 */
+export interface ResponseError {
+  /** 技术原因 */
+  message: string;
+  /** 人类可读提示 */
+  hint?: string;
+}
+
+/** 响应类型 — result 和 error 互斥 */
 export interface Response {
-  /** 对应请求的 ID */
-  id: string;
-  /** 操作是否成功 */
-  success: boolean;
   /** 成功时返回的数据 */
-  data?: ResponseData;
+  result?: ResponseData;
   /** 失败时的错误信息 */
-  error?: string;
+  error?: ResponseError;
 }
 
 /** Daemon 状态 */
@@ -356,10 +333,4 @@ export interface DaemonStatus {
   }>;
 }
 
-/**
- * 生成唯一请求 ID
- * @returns UUID v4 格式的字符串
- */
-export function generateId(): string {
-  return randomUUID();
-}
+

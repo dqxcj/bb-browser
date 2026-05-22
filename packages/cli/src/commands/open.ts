@@ -7,7 +7,7 @@
  *   bb-browser open <url> --tab 123      # 在指定 tabId 的 tab 中打开
  */
 
-import { generateId, type Request, type Response } from "@bb-browser/shared";
+import type { Request, Response } from "@bb-browser/shared";
 import { sendCommand } from "../client.js";
 import { ensureDaemonRunning } from "../daemon-manager.js";
 import { getSiteHintForDomain } from "./site.js";
@@ -37,8 +37,7 @@ export async function openCommand(
 
   // 构造请求
   const request: Request = {
-    id: generateId(),
-    action: "open",
+    method: "open",
     url: normalizedUrl,
   };
 
@@ -65,13 +64,13 @@ export async function openCommand(
   if (options.json) {
     console.log(JSON.stringify(response, null, 2));
   } else {
-    if (response.success) {
-      console.log(`已打开: ${response.data?.url ?? normalizedUrl}`);
-      if (response.data?.title) {
-        console.log(`标题: ${response.data.title}`);
+    if (response.result) {
+      console.log(`已打开: ${response.result?.url ?? normalizedUrl}`);
+      if (response.result?.title) {
+        console.log(`标题: ${response.result.title}`);
       }
-      if (response.data?.tabId) {
-        console.log(`Tab ID: ${response.data.tabId}`);
+      if (response.result?.tabId) {
+        console.log(`Tab ID: ${response.result.tabId}`);
       }
       // 提示：如果该域名有 site adapter，引导使用
       const siteHint = getSiteHintForDomain(normalizedUrl);
@@ -79,7 +78,7 @@ export async function openCommand(
         console.log(`\n💡 ${siteHint}`);
       }
     } else {
-      console.error(`错误: ${response.error}`);
+      console.error(`错误: ${response.error?.message}`);
       process.exit(1);
     }
   }

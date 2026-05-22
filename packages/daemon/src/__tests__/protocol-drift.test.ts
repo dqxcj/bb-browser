@@ -50,7 +50,7 @@ async function isChromeAvailable(): Promise<boolean> {
 }
 
 async function sendCommand(
-  action: string,
+  method: string,
   params: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
   const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/command`, {
@@ -59,7 +59,7 @@ async function sendCommand(
       "Content-Type": "application/json",
       Authorization: `Bearer ${TOKEN}`,
     },
-    body: JSON.stringify({ id: `drift-${Date.now()}`, action, ...params }),
+    body: JSON.stringify({ method, ...params }),
   });
   return res.json() as Promise<Record<string, unknown>>;
 }
@@ -181,49 +181,49 @@ describe("Protocol drift tests (requires Chrome + daemon)", async () => {
   // eval response shape
   // =========================================================================
 
-  it("eval response has success, data.result, data.tab (string), data.seq (number)", { skip: false }, async (t) => {
+  it("eval response has result.result, result.tab (string), result.seq (number)", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     const res = await sendCommand("eval", { script: "1 + 1" });
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.ok(data !== undefined, "data should be present");
-    assert.ok("result" in data, "data.result should exist");
-    assert.equal(typeof data.tab, "string", "data.tab should be string");
-    assert.equal(typeof data.seq, "number", "data.seq should be number");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.ok(result !== undefined, "result should be present");
+    assert.ok("result" in result, "result.result should exist");
+    assert.equal(typeof result.tab, "string", "result.tab should be string");
+    assert.equal(typeof result.seq, "number", "result.seq should be number");
   });
 
   // =========================================================================
   // open response shape
   // =========================================================================
 
-  it("open response has data.tab, data.seq, data.url", { skip: false }, async (t) => {
+  it("open response has result.tab, result.seq, result.url", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     const res = await sendCommand("open", { url: "about:blank" });
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.equal(typeof data.tab, "string", "data.tab should be string");
-    assert.equal(typeof data.seq, "number", "data.seq should be number");
-    assert.equal(typeof data.url, "string", "data.url should be string");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.equal(typeof result.tab, "string", "result.tab should be string");
+    assert.equal(typeof result.seq, "number", "result.seq should be number");
+    assert.equal(typeof result.url, "string", "result.url should be string");
   });
 
   // =========================================================================
   // tab_list response shape
   // =========================================================================
 
-  it("tab_list response has data.tabs (array) with correct tab entries", { skip: false }, async (t) => {
+  it("tab_list response has result.tabs (array) with correct tab entries", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     const res = await sendCommand("tab_list");
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.ok(Array.isArray(data.tabs), "data.tabs should be an array");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.ok(Array.isArray(result.tabs), "result.tabs should be an array");
 
-    const tabs = data.tabs as Array<Record<string, unknown>>;
+    const tabs = result.tabs as Array<Record<string, unknown>>;
     assert.ok(tabs.length > 0, "should have at least one tab");
 
     for (const tab of tabs) {
@@ -232,7 +232,6 @@ describe("Protocol drift tests (requires Chrome + daemon)", async () => {
       assert.equal(typeof tab.title, "string", "tab.title should be string");
       assert.equal(typeof tab.index, "number", "tab.index should be number");
       assert.equal(typeof tab.active, "boolean", "tab.active should be boolean");
-      // tabId can be string or number per protocol
       assert.ok(
         typeof tab.tabId === "string" || typeof tab.tabId === "number",
         "tab.tabId should be string or number",
@@ -244,42 +243,41 @@ describe("Protocol drift tests (requires Chrome + daemon)", async () => {
   // snapshot response shape
   // =========================================================================
 
-  it("snapshot response has data.snapshotData.snapshot (string)", { skip: false }, async (t) => {
+  it("snap response has result.snapshotData.snapshot (string)", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     // Open a page first so snapshot has content
     await sendCommand("open", { url: "data:text/html,<h1>drift test</h1>" });
-    // Wait a moment for the page to load
-    await sendCommand("wait", { ms: 500 });
+    // Wait for page to load
+    await new Promise((r) => setTimeout(r, 500));
 
-    const res = await sendCommand("snapshot");
+    const res = await sendCommand("snap");
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.ok(data.snapshotData !== undefined, "data.snapshotData should exist");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.ok(result.snapshotData !== undefined, "result.snapshotData should exist");
 
-    const snapshotData = data.snapshotData as Record<string, unknown>;
+    const snapshotData = result.snapshotData as Record<string, unknown>;
     assert.equal(typeof snapshotData.snapshot, "string", "snapshotData.snapshot should be string");
-    assert.equal(typeof data.tab, "string", "data.tab should be string");
+    assert.equal(typeof result.tab, "string", "result.tab should be string");
   });
 
   // =========================================================================
   // network requests response shape
   // =========================================================================
 
-  it("network requests response has data.networkRequests (array), data.cursor (number)", { skip: false }, async (t) => {
+  it("network requests response has result.networkRequests (array), result.cursor (number)", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     const res = await sendCommand("network", { networkCommand: "requests" });
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.ok(Array.isArray(data.networkRequests), "data.networkRequests should be an array");
-    assert.equal(typeof data.cursor, "number", "data.cursor should be number");
-    assert.equal(typeof data.tab, "string", "data.tab should be string");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.ok(Array.isArray(result.networkRequests), "result.networkRequests should be an array");
+    assert.equal(typeof result.cursor, "number", "result.cursor should be number");
+    assert.equal(typeof result.tab, "string", "result.tab should be string");
 
-    // If there are requests, verify entry shape
-    const requests = data.networkRequests as Array<Record<string, unknown>>;
+    const requests = result.networkRequests as Array<Record<string, unknown>>;
     if (requests.length > 0) {
       const req = requests[0];
       assert.equal(typeof req.url, "string", "request.url should be string");
@@ -293,32 +291,32 @@ describe("Protocol drift tests (requires Chrome + daemon)", async () => {
   // console get response shape
   // =========================================================================
 
-  it("console get response has data.consoleMessages (array), data.cursor (number)", { skip: false }, async (t) => {
+  it("console get response has result.consoleMessages (array), result.cursor (number)", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     const res = await sendCommand("console", { consoleCommand: "get" });
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.ok(Array.isArray(data.consoleMessages), "data.consoleMessages should be an array");
-    assert.equal(typeof data.cursor, "number", "data.cursor should be number");
-    assert.equal(typeof data.tab, "string", "data.tab should be string");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.ok(Array.isArray(result.consoleMessages), "result.consoleMessages should be an array");
+    assert.equal(typeof result.cursor, "number", "result.cursor should be number");
+    assert.equal(typeof result.tab, "string", "result.tab should be string");
   });
 
   // =========================================================================
   // errors get response shape
   // =========================================================================
 
-  it("errors get response has data.jsErrors (array), data.cursor (number)", { skip: false }, async (t) => {
+  it("errors get response has result.jsErrors (array), result.cursor (number)", { skip: false }, async (t) => {
     if (skipIfNoChrome()) { t.skip("Chrome CDP not available"); return; }
 
     const res = await sendCommand("errors", { errorsCommand: "get" });
 
-    assert.equal(res.success, true, "success should be true");
-    const data = res.data as Record<string, unknown>;
-    assert.ok(Array.isArray(data.jsErrors), "data.jsErrors should be an array");
-    assert.equal(typeof data.cursor, "number", "data.cursor should be number");
-    assert.equal(typeof data.tab, "string", "data.tab should be string");
+    assert.equal(res.error, undefined, "error should be absent");
+    const result = res.result as Record<string, unknown>;
+    assert.ok(Array.isArray(result.jsErrors), "result.jsErrors should be an array");
+    assert.equal(typeof result.cursor, "number", "result.cursor should be number");
+    assert.equal(typeof result.tab, "string", "result.tab should be string");
   });
 
   // =========================================================================

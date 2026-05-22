@@ -2,18 +2,17 @@
  * console 命令 - 查看控制台消息
  */
 
-import { generateId, type Request } from "@bb-browser/shared";
+import type { Request } from "@bb-browser/shared";
 import { sendCommand } from "../client.js";
 
 interface ConsoleOptions {
   json?: boolean;
   clear?: boolean;
   tabId?: string | number;
-  since?: string;        // "last_action" or a seq number
+  since?: string;
 }
 
 export async function consoleCommand(options: ConsoleOptions = {}): Promise<void> {
-  // Parse since: if numeric string, convert to number
   let since: string | number | undefined;
   if (options.since) {
     const num = parseInt(options.since, 10);
@@ -21,8 +20,7 @@ export async function consoleCommand(options: ConsoleOptions = {}): Promise<void
   }
 
   const request: Request & { since?: string | number } = {
-    id: generateId(),
-    action: "console",
+    method: "console",
     consoleCommand: options.clear ? "clear" : "get",
     tabId: options.tabId,
     since,
@@ -34,8 +32,8 @@ export async function consoleCommand(options: ConsoleOptions = {}): Promise<void
     return;
   }
 
-  if (!response.success) {
-    throw new Error(response.error || "Console command failed");
+  if (response.error) {
+    throw new Error(response.error.message || "Console command failed");
   }
 
   if (options.clear) {
@@ -43,7 +41,7 @@ export async function consoleCommand(options: ConsoleOptions = {}): Promise<void
     return;
   }
 
-  const messages = response.data?.consoleMessages || [];
+  const messages = response.result?.consoleMessages || [];
   
   if (messages.length === 0) {
     console.log("没有控制台消息");

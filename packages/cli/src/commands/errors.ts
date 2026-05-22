@@ -2,18 +2,17 @@
  * errors 命令 - 查看 JS 错误
  */
 
-import { generateId, type Request } from "@bb-browser/shared";
+import type { Request } from "@bb-browser/shared";
 import { sendCommand } from "../client.js";
 
 interface ErrorsOptions {
   json?: boolean;
   clear?: boolean;
   tabId?: string | number;
-  since?: string;        // "last_action" or a seq number
+  since?: string;
 }
 
 export async function errorsCommand(options: ErrorsOptions = {}): Promise<void> {
-  // Parse since: if numeric string, convert to number
   let since: string | number | undefined;
   if (options.since) {
     const num = parseInt(options.since, 10);
@@ -21,8 +20,7 @@ export async function errorsCommand(options: ErrorsOptions = {}): Promise<void> 
   }
 
   const request: Request & { since?: string | number } = {
-    id: generateId(),
-    action: "errors",
+    method: "errors",
     errorsCommand: options.clear ? "clear" : "get",
     tabId: options.tabId,
     since,
@@ -34,8 +32,8 @@ export async function errorsCommand(options: ErrorsOptions = {}): Promise<void> 
     return;
   }
 
-  if (!response.success) {
-    throw new Error(response.error || "Errors command failed");
+  if (response.error) {
+    throw new Error(response.error.message || "Errors command failed");
   }
 
   if (options.clear) {
@@ -43,7 +41,7 @@ export async function errorsCommand(options: ErrorsOptions = {}): Promise<void> 
     return;
   }
 
-  const errors = response.data?.jsErrors || [];
+  const errors = response.result?.jsErrors || [];
   
   if (errors.length === 0) {
     console.log("没有 JS 错误");

@@ -1,13 +1,8 @@
 /**
  * trace 命令 - 录制用户操作
- * 
- * 用法：
- *   bb-browser trace start   开始录制
- *   bb-browser trace stop    停止录制，输出事件列表
- *   bb-browser trace status  查看录制状态
  */
 
-import { generateId } from "@bb-browser/shared";
+import type { Request } from "@bb-browser/shared";
 import { sendCommand } from "../client.js";
 
 interface TraceOptions {
@@ -20,22 +15,21 @@ export async function traceCommand(
   options: TraceOptions = {}
 ): Promise<void> {
   const response = await sendCommand({
-    id: generateId(),
-    action: "trace",
+    method: "trace",
     traceCommand: subCommand,
     tabId: options.tabId,
-  });
+  } as Request);
 
   if (options.json) {
     console.log(JSON.stringify(response));
     return;
   }
 
-  if (!response.success) {
-    throw new Error(response.error || "Trace command failed");
+  if (response.error) {
+    throw new Error(response.error.message || "Trace command failed");
   }
 
-  const data = response.data;
+  const data = response.result;
 
   switch (subCommand) {
     case "start": {
@@ -48,7 +42,6 @@ export async function traceCommand(
 
     case "stop": {
       const events = data?.traceEvents || [];
-      const status = data?.traceStatus;
       
       console.log(`录制完成，共 ${events.length} 个事件\n`);
       
@@ -57,7 +50,6 @@ export async function traceCommand(
         break;
       }
       
-      // 输出事件列表
       for (let i = 0; i < events.length; i++) {
         const event = events[i];
         const refStr = event.ref !== undefined ? `@${event.ref}` : '';
@@ -89,6 +81,7 @@ export async function traceCommand(
         }
       }
       
+      const status = data?.traceStatus;
       console.log(`\n状态: ${status?.recording ? '录制中' : '已停止'}`);
       break;
     }
