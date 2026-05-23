@@ -423,18 +423,22 @@ def parse_product_detail(html, url, detail_html=""):
     return result
 
 
-def cmd_list(category, brand=None, page=1, json_out=False):
+def cmd_list(category, brand=None, page=1, json_out=False, sort="hot"):
     """List products in a category."""
     if category not in CATEGORIES:
         print(f"Unknown category: {category}")
         print(f"Available: {', '.join(CATEGORIES.keys())}")
         return
 
+    SORT_BASE = {"hot": 1, "latest": 5, "cheap": 4, "expensive": 3,
+                 "rating": 9, "recommend": 11}
+
     if brand:
         url = f"{BASE}/{category}/{brand}/"
     else:
-        offset = (page - 1) * 30 + 1 if page > 1 else ""
-        suffix = f"s{offset}.shtml" if offset else ""
+        base = SORT_BASE.get(sort, 1)
+        offset = base + (page - 1) * 30
+        suffix = f"s{offset}.shtml" if offset > 1 else ""
         url = f"{BASE}/{category}/{suffix}"
 
     html = fetch(url)
@@ -489,6 +493,7 @@ def main():
 
     page = 1
     brand = None
+    sort = "hot"
     i = 0
     while i < len(args):
         if args[i] == "--page" and i + 1 < len(args):
@@ -496,6 +501,9 @@ def main():
             i += 2
         elif args[i] == "--brand" and i + 1 < len(args):
             brand = args[i + 1]
+            i += 2
+        elif args[i] == "--sort" and i + 1 < len(args):
+            sort = args[i + 1]
             i += 2
         else:
             i += 1
@@ -517,7 +525,8 @@ def main():
     elif cmd == "list":
         if not pos_args:
             sys.exit("Usage: pconline list <category> [--brand X] [--page N] [--json]")
-        cmd_list(pos_args[0], brand=brand, page=page, json_out=json_out)
+        cmd_list(pos_args[0], brand=brand, page=page, json_out=json_out,
+                 sort=sort)
     elif cmd == "categories":
         cmd_categories()
     else:

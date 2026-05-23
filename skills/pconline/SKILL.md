@@ -17,7 +17,8 @@ Query `product.pconline.com.cn` (太平洋电脑网) from terminal. One command 
 |------|---------|
 | Search products | `search "<keyword>" [--json]` |
 | Full specs (8 categories) | `detail "<url>" [--json]` |
-| Browse by category | `list <category> [--brand X] [--page N]` |
+| Browse by category | `list <category> [--brand X] [--page N] [--sort latest\|hot\|rating\|cheap\|expensive]` |
+| Latest phones | `list mobile --sort latest` |
 | Search suggestions | `suggest "<keyword>"` |
 | List categories | `categories` |
 
