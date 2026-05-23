@@ -207,6 +207,31 @@ def _search_listing_page(url: str, keyword: str) -> list:
     return matched
 
 
+def _detect_brand_id(keyword: str) -> int | None:
+    """If keyword contains a known brand, return its ZOL brand_id."""
+    kw = keyword.lower()
+    for alias, cn in BRAND_ALIASES.items():
+        if alias in kw:
+            return BRAND_IDS.get(cn)
+    for cn, bid in BRAND_IDS.items():
+        if cn.lower() in kw:
+            return bid
+    return None
+
+
+def _search_pages(urls: list[str], keyword: str, seen_ids: set, max_results: int) -> list:
+    """Search multiple listing pages for keyword matches."""
+    results = []
+    for url in urls:
+        for p in _search_listing_page(url, keyword):
+            if p.product_id not in seen_ids:
+                seen_ids.add(p.product_id)
+                results.append(p)
+                if len(results) >= max_results:
+                    return results
+    return results
+
+
 @cli.command("search")
 @click.argument("keyword")
 @click.option("--max", "-m", "max_results", type=int, default=30, help="Max results")
@@ -220,31 +245,30 @@ def search_cmd(keyword: str, max_results: int, output_fmt: str):
     Example:
       zol search "小米17 Max"
     """
+    seen_ids: set[int] = set()
     all_phones: list = []
-    seen_ids = set()
+    from .consts import SORT_PARAMS, CATEGORY_ID, BASE_URL
 
-    # Search hot listing first (pages 1-5), then time-sorted (pages 1-3)
-    for page in range(1, 6):
-        url = get_all_phones_url(page)
-        for p in _search_listing_page(url, keyword):
-            if p.product_id not in seen_ids:
-                seen_ids.add(p.product_id)
-                all_phones.append(p)
-        if len(all_phones) >= max_results:
-            break
+    sort_time = SORT_PARAMS["time"]
 
-    # If not enough results, also search time-sorted listing
-    if len(all_phones) < max_results:
-        from .consts import SORT_PARAMS, CATEGORY_ID, BASE_URL
-        sort_suffix = SORT_PARAMS["time"]
+    # Build page URLs to search
+    urls: list[str] = []
+
+    # 1. Brand listing (if keyword contains a known brand) — most targeted
+    brand_id = _detect_brand_id(keyword)
+    if brand_id:
         for page in range(1, 4):
-            url = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_{page}_{sort_suffix}_{page}.html"
-            for p in _search_listing_page(url, keyword):
-                if p.product_id not in seen_ids:
-                    seen_ids.add(p.product_id)
-                    all_phones.append(p)
-            if len(all_phones) >= max_results:
-                break
+            urls.append(f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_{brand_id}_list_{page}.html")
+
+    # 2. Hot listing pages 1-10
+    for page in range(1, 11):
+        urls.append(get_all_phones_url(page))
+
+    # 3. Time-sorted listing pages 1-5
+    for page in range(1, 6):
+        urls.append(f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_{page}_{sort_time}_{page}.html")
+
+    all_phones = _search_pages(urls, keyword, seen_ids, max_results)
 
     if output_fmt == "json":
         _output_json(all_phones[:max_results])
