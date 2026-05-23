@@ -24,8 +24,8 @@ Query `product.pconline.com.cn` (太平洋电脑网) from terminal. One command 
 
 ## Detail Output
 
-`detail` fetches both the main page AND `_detail.html` for complete specs:
-基本参数, 硬件参数 (CPU/GPU/RAM/storage/battery/sensors/NFC), 摄像头 (all lenses + video modes), 屏幕 (refresh rate/brightness/PPI), 网络与连接 (5G bands/WiFi/BT/GPS), 外观 (dimensions/weight/colors), 多媒体, 基本功能.
+`detail` fetches both the main page AND `_detail.html` for complete specs including:
+基本参数 (**发布时间**, 报价, 型号, OS), 硬件参数 (CPU/GPU/RAM/storage/battery/sensors/NFC), 摄像头 (all lenses + video modes), 屏幕 (refresh rate/brightness/PPI), 网络与连接 (5G bands/WiFi/BT/GPS), 外观 (dimensions/weight/colors), 多媒体, 基本功能.
 
 Use `--json` for structured export.
 
