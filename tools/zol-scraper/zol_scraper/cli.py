@@ -13,7 +13,7 @@ from .listing import parse_listing
 from .specs import parse_specs
 from .filters import parse_criteria, build_listing_url, match_specs, get_all_phones_url, get_brand_listing_url
 from .cache import fetch_cached
-from .consts import BRAND_IDS, BRAND_ALIASES
+from .consts import BRAND_IDS, BRAND_ALIASES, SORT_PARAMS, BASE_URL, CATEGORY_ID
 
 console = Console()
 
@@ -238,26 +238,70 @@ def specs_cmd(product_id: int, output_fmt: str):
 @click.option("--page", "-p", type=int, default=1, help="Page number")
 @click.option("--max", "-m", "max_results", type=int, default=48, help="Max results")
 @click.option(
+    "--sort", "-s", "sort_by", type=click.Choice(["hot", "time", "price", "rating", "reviews"]),
+    default="hot", help="Sort order (default: hot)"
+)
+@click.option(
     "--output", "-o", "output_fmt", type=click.Choice(["json", "table"]), default="json"
 )
-def list_cmd(brand: str, page: int, max_results: int, output_fmt: str):
+def list_cmd(brand: str, page: int, max_results: int, output_fmt: str, sort_by: str):
     """List phones, optionally filtered by brand.
 
     \b
     Examples:
       zol list
       zol list --brand 华为
-      zol list --brand xiaomi --page 2
+      zol list --sort time
+      zol list --brand xiaomi --sort price --page 2
     """
+    sort_suffix = SORT_PARAMS.get(sort_by, SORT_PARAMS["hot"])
+
     if brand:
         brand_id = _resolve_brand(brand)
         if not brand_id:
             console.print(f"[red]Unknown brand: {brand}. Available: {', '.join(BRAND_IDS.keys())}[/red]")
             return
-        url = get_brand_listing_url(brand_id, page)
+        if sort_by == "hot":
+            url = get_brand_listing_url(brand_id, page)
+        else:
+            url = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_{brand_id}_list_{page}_{sort_suffix}_{page}.html"
     else:
-        url = get_all_phones_url(page)
+        if sort_by == "hot":
+            url = get_all_phones_url(page)
+        else:
+            url = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_{page}_{sort_suffix}_{page}.html"
 
+    console.print(f"[dim]Fetching: {url}[/dim]")
+
+    try:
+        html = fetch_cached(url, fetch)
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return
+
+    phones = parse_listing(html)[:max_results]
+
+    if output_fmt == "json":
+        _output_json(phones)
+    else:
+        _output_table(phones)
+
+
+@cli.command("latest")
+@click.option("--max", "-m", "max_results", type=int, default=20, help="Max results")
+@click.option(
+    "--output", "-o", "output_fmt", type=click.Choice(["json", "table"]), default="table"
+)
+def latest_cmd(max_results: int, output_fmt: str):
+    """Show the latest/recently released phones.
+
+    \b
+    Shortcut for: zol list --sort time
+    Example:
+      zol latest --max 10
+    """
+    sort_suffix = SORT_PARAMS["time"]
+    url = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_1_{sort_suffix}_1.html"
     console.print(f"[dim]Fetching: {url}[/dim]")
 
     try:

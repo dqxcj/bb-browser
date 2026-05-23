@@ -12,6 +12,29 @@ SPEC_FILTER_URL = (
 )
 ALL_PHONES_URL = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_{{page}}.html"
 
+# --- Sort URL suffixes ---
+# ZOL listing URLs use positional parameters: ..._list_{page}_{A}_{B}_{C}_0_{page}.html
+# A=0 (all), B=sort, C=year-range (2=all)
+# Sort values: 0=hot, 9=time, 3=price↓, 5=rating, 7=reviews
+SORT_PARAMS: dict[str, str] = {
+    "hot": "0_0_2_0",
+    "time": "0_9_2_0",
+    "price": "0_3_2_0",
+    "rating": "0_5_2_0",
+    "reviews": "0_7_2_0",
+}
+
+# Brand listing with sort: subcate57_{brand_id}_list_{page}_{sort_params}_{page}.html
+BRAND_LISTING_SORTED_URL = (
+    f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}"
+    f"_{{brand_id}}_list_{{page}}_{{sort_params}}_{{page}}.html"
+)
+# All phones with sort
+ALL_PHONES_SORTED_URL = (
+    f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}"
+    f"_0_list_{{page}}_{{sort_params}}_{{page}}.html"
+)
+
 # --- Brand ID mapping ---
 BRAND_IDS: dict[str, int] = {
     "华为": 613,
