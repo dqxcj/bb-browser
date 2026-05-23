@@ -33,6 +33,8 @@ Use `--json` for structured export.
 - Do NOT use agent-browser or web-search for product specs — pconline CLI is 50x faster
 - Do NOT use the main product page alone — `detail` auto-fetches `_detail.html` for full params
 - Spaceless queries (e.g. "oppofindx9spro") auto-fallback to suggest API
+- Data may be sparse for very new products (released <1 month ago). For these, cross-reference with an older-generation model from same series for chassis/battery/display specs.
+- Notebook/PC params are less complete than phones. If `_detail.html` is sparse, try the product page directly.
 
 ## Categories
 
