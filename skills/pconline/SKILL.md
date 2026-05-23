@@ -36,6 +36,8 @@ Use `--json` for structured export.
 - Spaceless queries (e.g. "oppofindx9spro") auto-fallback to suggest API
 - Data may be sparse for very new products (released <1 month ago). For these, cross-reference with an older-generation model from same series for chassis/battery/display specs.
 - Notebook/PC params are less complete than phones. If `_detail.html` is sparse, try the product page directly.
+- Newly listed products may appear in `list --sort latest` but NOT in `search` (search index lag). If search returns empty, try `list --sort latest` as fallback.
+- When comparing multiple variants of the same series (e.g., Xiaomi 17 vs 17 Ultra vs 17 Pro), verify you're looking at the correct product page — search may return a sibling model.
 
 ## Categories
 
