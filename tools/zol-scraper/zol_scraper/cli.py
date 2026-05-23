@@ -185,6 +185,28 @@ def filter_cmd(criteria: str, max_results: int, output_fmt: str, fetch_specs: bo
         _output_table(results)
 
 
+def _search_listing_page(url: str, keyword: str) -> list:
+    """Search a single listing page for phones matching keyword."""
+    try:
+        html = fetch_cached(url, fetch)
+        phones = parse_listing(html)
+    except Exception:
+        return []
+    # Strip special chars from keyword for fuzzy matching
+    keyword_clean = keyword.lower().translate(
+        str.maketrans({"＋": "", "+": "", "－": "", "-": ""})
+    )
+    matched = []
+    for p in phones:
+        name_lower = p.name.lower()
+        name_clean = name_lower.translate(
+            str.maketrans({"＋": "+", "（": "(", "）": ")", "：": ":", "，": ","})
+        )
+        if keyword.lower() in name_lower or keyword_clean in name_clean:
+            matched.append(p)
+    return matched
+
+
 @cli.command("search")
 @click.argument("keyword")
 @click.option("--max", "-m", "max_results", type=int, default=30, help="Max results")
@@ -198,27 +220,36 @@ def search_cmd(keyword: str, max_results: int, output_fmt: str):
     Example:
       zol search "小米17 Max"
     """
-    # Search across multiple pages
-    all_phones = []
-    for page in range(1, 5):
-        try:
-            url = get_all_phones_url(page)
-            html = fetch_cached(url, fetch)
-            phones = parse_listing(html)
-            all_phones.extend(phones)
-            if len(phones) < 40:  # Last page
-                break
-        except Exception:
+    all_phones: list = []
+    seen_ids = set()
+
+    # Search hot listing first (pages 1-5), then time-sorted (pages 1-3)
+    for page in range(1, 6):
+        url = get_all_phones_url(page)
+        for p in _search_listing_page(url, keyword):
+            if p.product_id not in seen_ids:
+                seen_ids.add(p.product_id)
+                all_phones.append(p)
+        if len(all_phones) >= max_results:
             break
 
-    # Filter by keyword
-    keyword_lower = keyword.lower()
-    matched = [p for p in all_phones if keyword_lower in p.name.lower()]
+    # If not enough results, also search time-sorted listing
+    if len(all_phones) < max_results:
+        from .consts import SORT_PARAMS, CATEGORY_ID, BASE_URL
+        sort_suffix = SORT_PARAMS["time"]
+        for page in range(1, 4):
+            url = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_{page}_{sort_suffix}_{page}.html"
+            for p in _search_listing_page(url, keyword):
+                if p.product_id not in seen_ids:
+                    seen_ids.add(p.product_id)
+                    all_phones.append(p)
+            if len(all_phones) >= max_results:
+                break
 
     if output_fmt == "json":
-        _output_json(matched[:max_results])
+        _output_json(all_phones[:max_results])
     else:
-        _output_table(matched[:max_results])
+        _output_table(all_phones[:max_results])
 
 
 @cli.command("specs")
