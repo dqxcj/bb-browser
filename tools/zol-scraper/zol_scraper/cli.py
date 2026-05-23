@@ -30,7 +30,7 @@ def _output_json(data, pretty: bool = True):
     click.echo(json.dumps(data, ensure_ascii=False, indent=indent, default=convert))
 
 
-def _output_table(phones: list, columns: list[str] | None = None):
+def _output_table(phones: list, show_date: bool = False):
     """Output phone list as a Rich table."""
     if not phones:
         console.print("[dim]No results.[/dim]")
@@ -38,16 +38,33 @@ def _output_table(phones: list, columns: list[str] | None = None):
 
     table = Table(title=f"Results ({len(phones)})")
     table.add_column("ID", style="dim")
+    if show_date:
+        table.add_column("Release Date", style="yellow")
     table.add_column("Name", style="cyan")
     table.add_column("Price", style="green")
 
     for p in phones:
         pid = str(getattr(p, "product_id", ""))
-        name = getattr(p, "name", "")[:70]
+        name = getattr(p, "name", "")[:65]
         price = getattr(p, "price", "") or "-"
-        table.add_row(pid, name, price)
+        if show_date:
+            date = getattr(p, "release_date", None) or "-"
+            table.add_row(pid, date, name, price)
+        else:
+            table.add_row(pid, name, price)
 
     console.print(table)
+
+
+def _fetch_release_date(product_id: int) -> str:
+    """Fetch release date from a phone's specs page. Returns '-' on failure."""
+    try:
+        url = spec_url_from_id(product_id)
+        html = fetch_cached(url, fetch)
+        specs = parse_specs(html, product_id)
+        return specs.basic.get("国内发布时间", "-")
+    except Exception:
+        return "-"
 
 
 def _specs_to_table(specs):
@@ -292,13 +309,17 @@ def list_cmd(brand: str, page: int, max_results: int, output_fmt: str, sort_by: 
 @click.option(
     "--output", "-o", "output_fmt", type=click.Choice(["json", "table"]), default="table"
 )
-def latest_cmd(max_results: int, output_fmt: str):
-    """Show the latest/recently released phones.
+@click.option(
+    "--dates/--no-dates", default=True, help="Fetch release dates (default: on)"
+)
+def latest_cmd(max_results: int, output_fmt: str, dates: bool):
+    """Show the latest/recently released phones with release dates.
 
     \b
     Shortcut for: zol list --sort time
     Example:
       zol latest --max 10
+      zol latest --max 10 --no-dates  (faster, no spec fetching)
     """
     sort_suffix = SORT_PARAMS["time"]
     url = f"{BASE_URL}/cell_phone_index/subcate{CATEGORY_ID}_0_list_1_{sort_suffix}_1.html"
@@ -312,10 +333,21 @@ def latest_cmd(max_results: int, output_fmt: str):
 
     phones = parse_listing(html)[:max_results]
 
+    if dates:
+        console.print(f"[dim]Fetching release dates for {len(phones)} phones...[/dim]")
+        for phone in phones:
+            phone.release_date = _fetch_release_date(phone.product_id)  # type: ignore
+
     if output_fmt == "json":
-        _output_json(phones)
+        _output_json([{
+            "product_id": p.product_id,
+            "name": p.name,
+            "price": p.price,
+            "release_date": getattr(p, "release_date", None),
+            "detail_url": p.detail_url,
+        } for p in phones])
     else:
-        _output_table(phones)
+        _output_table(phones, show_date=dates)
 
 
 if __name__ == "__main__":

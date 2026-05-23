@@ -4,12 +4,15 @@ from typing import Optional
 
 class PhoneSummary(BaseModel):
     """Minimal phone info from a listing page."""
+    model_config = {"extra": "allow"}
+
     product_id: int
     name: str
     detail_url: str = ""
     spec_url: str = ""
     image_url: Optional[str] = None
     price: Optional[str] = None
+    release_date: Optional[str] = None
 
 
 class PhoneSpecs(BaseModel):
