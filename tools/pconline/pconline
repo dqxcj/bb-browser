@@ -1,0 +1,529 @@
+#!/usr/bin/env python3
+"""pconline - CLI for product.pconline.com.cn
+
+Usage:
+  pconline search <keyword> [--json] [--page N]
+  pconline detail <url-or-id> [--json]
+  pconline list <category> [--brand X] [--page N] [--json]
+  pconline suggest <keyword>
+  pconline categories
+"""
+
+import urllib.request
+import urllib.parse
+import urllib.error
+import re
+import json
+import sys
+import os
+import time
+import hashlib
+from html import unescape
+
+BASE = "https://product.pconline.com.cn"
+SEARCH_BASE = "https://ks.pconline.com.cn"
+SUGGEST_URL = SEARCH_BASE + "/SearchSuggest_online.jsp"
+CACHE_DIR = os.path.expanduser("~/.cache/pconline")
+
+CATEGORIES = {
+    "mobile": "手机", "notebook": "笔记本", "dc": "数码相机",
+    "lcd_tv": "液晶电视", "earphone": "耳机", "projection": "投影仪",
+    "tablet": "平板电脑", "router": "路由器", "power": "移动电源",
+    "wearable": "智能穿戴", "pc": "台式机", "server": "服务器",
+}
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+}
+
+
+def cache_path(url):
+    h = hashlib.md5(url.encode()).hexdigest()
+    return os.path.join(CACHE_DIR, h)
+
+
+def fetch(url, force=False):
+    """Fetch URL with GBK auto-decode and cache."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cp = cache_path(url)
+
+    if not force and os.path.exists(cp):
+        age = time.time() - os.path.getmtime(cp)
+        if age < 3600:
+            with open(cp, "r", encoding="utf-8") as f:
+                return f.read()
+
+    req = urllib.request.Request(url, headers=HEADERS)
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        raw = resp.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+    except Exception as e:
+        sys.exit(f"Error: {e}")
+
+    for enc in ["gbk", "gb2312", "gb18030", "utf-8"]:
+        try:
+            html = raw.decode(enc)
+            if len(html) > 100:
+                break
+        except Exception:
+            continue
+
+    with open(cp, "w", encoding="utf-8") as f:
+        f.write(html)
+    return html
+
+
+def strip_tags(text):
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def double_encode(s):
+    """Double URI encode for search suggest API."""
+    return urllib.parse.quote(urllib.parse.quote(s))
+
+
+# ── Commands ─────────────────────────────────────────────────
+
+
+def cmd_suggest(keyword):
+    """Search suggestions."""
+    url = SUGGEST_URL + "?q=" + double_encode(keyword)
+    html = fetch(url, force=True)
+    lines = html.strip().split("\n")
+    names = [l.strip() for l in lines if l.strip() and not l.strip().startswith("<")]
+    if names:
+        for n in names[:15]:
+            print(n)
+    else:
+        print("No suggestions found.")
+
+
+def cmd_search(keyword, page=1, json_out=False):
+    """Search products by keyword."""
+    srch_url = f"{SEARCH_BASE}/product.shtml?q={urllib.parse.quote(keyword.encode('gbk'))}&pageNo={page}"
+    html = fetch(srch_url, force=True)
+
+    def _extract(html_text):
+        prods = []
+        s = set()
+        lp = re.compile(
+            r'<a[^>]*href="(//product\.pconline\.com\.cn/([a-z_]+)/([a-z]+)/(\d+)\.html)"[^>]*>'
+            r'(.*?)</a>',
+            re.DOTALL,
+        )
+        for m in lp.finditer(html_text):
+            fu, ca, br, pi = m.group(1), m.group(2), m.group(3), m.group(4)
+            nm = strip_tags(m.group(5)).strip()
+            bad = {"", "参数", "报价", "图片", "点评"}
+            if nm.lower() in bad or len(nm) < 2:
+                continue
+            if pi in s:
+                continue
+            s.add(pi)
+            prods.append({"id": pi, "name": nm, "category": ca,
+                         "brand": br, "url": "https:" + fu})
+        return prods
+
+    products = _extract(html)
+
+    # Fallback: no results → try search suggest for matching terms
+    if not products:
+        suggest_url = SUGGEST_URL + "?q=" + double_encode(keyword)
+        try:
+            raw = fetch(suggest_url, force=True)
+            suggestions = [l.strip() for l in raw.strip().split("\n")
+                          if l.strip() and not l.strip().startswith("<")
+                          and l.strip() != "产品名称"]
+            for s in suggestions[:3]:
+                if s == keyword:
+                    continue
+                srch2 = f"{SEARCH_BASE}/product.shtml?q={urllib.parse.quote(s.encode('gbk'))}&pageNo=1"
+                products = _extract(fetch(srch2, force=True))
+                if products:
+                    break
+        except Exception:
+            pass
+
+    if not products:
+        print(f"No products found for '{keyword}'.")
+        return
+
+    if json_out:
+        print(json.dumps(products, ensure_ascii=False, indent=2))
+    else:
+        print(f"{'Name':<30} {'Category':<12} {'Brand':<12} {'ID'}")
+        print("-" * 70)
+        for p in products[:20]:
+            name = p["name"][:28] or "(search result)"
+            print(f"{name:<30} {p['category']:<12} {p['brand']:<12} {p['id']}")
+        if len(products) > 20:
+            print(f"\n... and {len(products)-20} more. Use --page N for more.")
+        print(f"\nUse 'pconline detail <ID>' to see full specs.")
+
+
+def cmd_detail(identifier, json_out=False):
+    """Show full product details."""
+    pid = identifier
+    url = identifier
+    if not identifier.startswith("http"):
+        sys.exit("Please provide full URL or use 'pconline search' first.")
+
+    html = fetch(url, force=True)
+    if not html:
+        sys.exit("Product not found.")
+
+    # Also fetch the full parameter detail page
+    detail_url = url.replace(".html", "_detail.html")
+    detail_html = ""
+    try:
+        detail_html = fetch(detail_url, force=True)
+    except Exception:
+        pass
+
+    result = parse_product_detail(html, url, detail_html)
+
+    if json_out:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"\n{'='*60}")
+        print(f"  {result['name']}")
+        print(f"{'='*60}")
+        if result.get("score"):
+            print(f"  评分: {result['score']}/10")
+        print()
+
+        # ── Full params from _detail.html ──
+        if result.get("params"):
+            for cat, items in result["params"].items():
+                if cat in ("对比",):
+                    continue
+                print(f"\n  [{cat}]")
+                for k, v in items.items():
+                    print(f"    {k:<14} {v}")
+
+        # ── Variants ──
+        if result.get("variants"):
+            print(f"\n  [变体/价格]")
+            for v in result["variants"]:
+                extra = ""
+                if v.get("cpu"):
+                    extra += f" | {v['cpu']}"
+                if v.get("battery"):
+                    extra += f" | {v['battery']}"
+                print(f"    {v['name']:<30} {v.get('price','N/A')}{extra}")
+
+        # ── Basic specs from main page ──
+        if result.get("specs"):
+            shown = set()
+            for cat_items in result.get("params", {}).values():
+                for k in cat_items:
+                    shown.add(k)
+            remaining = {k: v for k, v in result["specs"].items()
+                        if k not in shown}
+            if remaining:
+                print(f"\n  [其他]")
+                for k, v in remaining.items():
+                    print(f"    {k:<14} {v[:80]}")
+
+        if result.get("storage_variants"):
+            print(f"\n  [存储版本] {', '.join(result['storage_variants'])}")
+
+        if result.get("compare"):
+            print("  [竞品对比]")
+            for cm in result["compare"]:
+                parts = [f"{cm.get('name',''):<25}"]
+                for k in ["screen", "cpu", "camera", "battery"]:
+                    if k in cm:
+                        parts.append(f"{cm[k][:30]}")
+                print("    " + " | ".join(parts))
+            print()
+
+
+def parse_product_detail(html, url, detail_html=""):
+    """Parse product detail page into structured data."""
+    result = {"url": url}
+
+    # Title
+    title_m = re.search(r"<title>(.*?)</title>", html)
+    result["title"] = strip_tags(title_m.group(1)) if title_m else ""
+
+    # H1
+    h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.DOTALL)
+    result["name"] = strip_tags(h1_m.group(1)) if h1_m else result.get("title", "")
+
+    # Score
+    score_m = re.search(r'class="[^"]*p-c-score[^"]*"[^>]*>([\d.]+)', html)
+    result["score"] = score_m.group(1) if score_m else None
+
+    # ── Full params from _detail.html ──
+    result["params"] = {}
+    if detail_html:
+        dt_tables = re.findall(r"<table[^>]*>(.*?)</table>", detail_html, re.DOTALL)
+        for dt in dt_tables:
+            rows = re.findall(r"<tr[^>]*>(.*?)</tr>", dt, re.DOTALL)
+            if not rows:
+                continue
+            first_cell = strip_tags(re.findall(
+                r"<t[dh][^>]*>(.*?)</t[dh]>", rows[0], re.DOTALL)[0]
+                if re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", rows[0], re.DOTALL) else "")
+            # Skip if first cell is a variant name or disclaimer
+            if not first_cell or first_cell in ("型号", "对比") or "*" in first_cell:
+                continue
+
+            category = first_cell
+            result["params"][category] = {}
+
+            for row in rows[1:]:
+                cells = [strip_tags(c) for c in re.findall(
+                    r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL)]
+                cells = [c for c in cells if c]
+                if len(cells) >= 2:
+                    k = cells[0]
+                    v = cells[1]
+                    # Skip helper links like "智能手机是什么"
+                    # Clean up helper links: remove "• X是什么" and "• 查看所有X"
+                    v = re.sub(r"\s*•\s*[^,]*?(?:是什么|查看所有)[^,]*", "", v)
+                    v = re.sub(r"\s*点击.*?(?:天梯图|$)", "", v)
+                    v = re.sub(r"\s+,", ",", v)
+                    v = re.sub(r",\s*,", ",", v)
+                    v = v.strip().rstrip(",").strip()
+                    if k and v:
+                        result["params"][category][k] = v
+
+    # Parse tables from main page
+    tables = re.findall(r"<table[^>]*>(.*?)</table>", html, re.DOTALL)
+    result["variants"] = []
+    result["specs"] = {}
+    result["compare"] = []
+
+    for table in tables:
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table, re.DOTALL)
+        if not rows:
+            continue
+
+        # Get all cells from all rows
+        all_rows = []
+        for row in rows:
+            cells = [strip_tags(c) for c in re.findall(
+                r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL)]
+            cells = [c for c in cells if c]
+            if cells:
+                all_rows.append(cells)
+
+        if not all_rows:
+            continue
+
+        hdr = all_rows[0]
+        hdr_str = " ".join(hdr)
+
+        # ── Variant table ──
+        # Header: 型号 | 参数差异 | 参考价 | 在售电商 | 相关信息 | 差异对比
+        if "型号" in hdr_str and "参数差异" in hdr_str and len(hdr) >= 4:
+            for cells in all_rows[1:]:
+                if len(cells) < 3:
+                    continue
+                name = cells[0]
+                if "系列" in name or "哪里不同" in name:
+                    continue  # skip the link row
+                diff_val = cells[1] if len(cells) > 1 else ""
+                price = cells[2] if len(cells) > 2 else ""
+                v = {"name": name, "diff": diff_val, "price": price}
+                # Parse CPU and battery from diff
+                cpu_m = re.search(r"CPU[：:]\s*(.+?)(?:\s\s|\s*电池|$)", diff_val)
+                if cpu_m:
+                    v["cpu"] = cpu_m.group(1)
+                bat_m = re.search(r"电池[^：:]*[：:]\s*(.+?)$", diff_val)
+                if bat_m:
+                    v["battery"] = bat_m.group(1)
+                result["variants"].append(v)
+            continue
+
+        # ── Comparison table ──
+        # Header row0[0]="竞品型号\n对比内容", row0[1:]=model names
+        if "竞品型号" in hdr_str or "对比内容" in hdr_str:
+            # Extract model info from header cells
+            models = []
+            for i in range(1, len(hdr)):
+                h = hdr[i]
+                # Parse "ModelName\n\n\n\n￥price" pattern
+                m = re.match(r"^(\S.+?)\s*￥(\d+)", h.replace("\n", " ").strip())
+                if m:
+                    models.append({"name": m.group(1), "price": m.group(2)})
+                elif "品牌" not in h and "型号" not in h:
+                    models.append({"name": h[:25]})
+
+            for cells in all_rows[1:]:
+                if len(cells) < 2:
+                    continue
+                field = cells[0]
+                values = cells[1:]
+                field_map = {"屏幕": "screen", "处理器": "cpu",
+                            "摄像头": "camera", "电池": "battery"}
+                key = field_map.get(field, field)
+                # First value is this product
+                if values:
+                    result["specs"][key] = values[0]
+                # Compare with other models
+                for mi, model in enumerate(models):
+                    if mi < len(values):
+                        model[key] = values[mi]
+
+            if models:
+                result["compare"] = models
+            continue
+
+    # ── Rich specs from baseParam DL ──
+    # <dl class="baseParam"><dt>基础参数：</dt><dd><i>操作系统：Android</i> ...</dd></dl>
+    base_dl = re.search(
+        r'<dl[^>]*class="[^"]*baseParam[^"]*"[^>]*>(.*?)</dl>', html, re.DOTALL)
+    if base_dl:
+        i_tags = re.findall(r"<i[^>]*>(.*?)</i>", base_dl.group(1), re.DOTALL)
+        for tag in i_tags:
+            text = strip_tags(tag).strip()
+            if "：" in text or ":" in text:
+                sep = "：" if "：" in text else ":"
+                key, val = text.split(sep, 1)
+                key, val = key.strip(), val.strip()
+                if key and val and len(val) >= 2:
+                    result["specs"][key] = val
+
+    # ── Storage variants from <i class="item"> ──
+    for item in re.findall(r'<i[^>]*class="[^"]*item[^"]*"[^>]*>(\d+[Gg][Bb]\+[\d.]+[TtGg][Bb])</i>', html):
+        if "storage_variants" not in result:
+            result["storage_variants"] = []
+        if item not in result["storage_variants"]:
+            result["storage_variants"].append(item)
+
+    # ── Detailed params from keyparams section ──
+    kp = re.search(
+        r'<div[^>]*id="area-keyparams"[^>]*>(.*?)</div>\s*<div[^>]*class="[^"]*ivy',
+        html, re.DOTALL)
+    if kp:
+        for item in re.findall(r'<i[^>]*>(.*?)</i>', kp.group(1), re.DOTALL):
+            text = strip_tags(item).strip()
+            if ("：" in text or ":" in text) and len(text) < 120:
+                sep = "：" if "：" in text else ":"
+                key, val = text.split(sep, 1)
+                key, val = key.strip(), val.strip()
+                if key and val and len(val) >= 2 and key not in result["specs"]:
+                    result["specs"][key] = val
+
+    # Extract ID from URL
+    id_m = re.search(r"/(\d{5,})\.html", url)
+    result["id"] = id_m.group(1) if id_m else None
+
+    return result
+
+
+def cmd_list(category, brand=None, page=1, json_out=False):
+    """List products in a category."""
+    if category not in CATEGORIES:
+        print(f"Unknown category: {category}")
+        print(f"Available: {', '.join(CATEGORIES.keys())}")
+        return
+
+    if brand:
+        url = f"{BASE}/{category}/{brand}/"
+    else:
+        offset = (page - 1) * 30 + 1 if page > 1 else ""
+        suffix = f"s{offset}.shtml" if offset else ""
+        url = f"{BASE}/{category}/{suffix}"
+
+    html = fetch(url)
+
+    # Extract product links with titles
+    items = re.findall(
+        r'<a[^>]+href="(//product\.pconline\.com\.cn/' +
+        re.escape(category) + r'/([a-z]+)/(\d+)\.html)"[^>]*title="([^"]+)"',
+        html,
+    )
+
+    seen = set()
+    products = []
+    for full_url, br, pid, title in items:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        products.append({"id": pid, "name": strip_tags(title),
+                        "brand": br, "url": "https:" + full_url})
+
+    if json_out:
+        print(json.dumps(products, ensure_ascii=False, indent=2))
+    else:
+        cat_name = CATEGORIES.get(category, category)
+        print(f"\n{cat_name} - Page {page}" + (f" ({brand})" if brand else ""))
+        print("-" * 70)
+        for p in products[:30]:
+            print(f"  {p['name'][:35]:<36} {p['brand']:<12} ID:{p['id']}")
+        print(f"\n  Total: {len(products)} products")
+        print(f"  Use 'pconline detail <ID>' for full specs.")
+
+
+def cmd_categories():
+    """List all categories."""
+    for k, v in CATEGORIES.items():
+        print(f"  {k:<14} {v}")
+
+
+# ── Main ─────────────────────────────────────────────────
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return
+
+    cmd = sys.argv[1]
+    args = sys.argv[2:]
+
+    json_out = "--json" in args
+    args = [a for a in args if a != "--json"]
+
+    page = 1
+    brand = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--page" and i + 1 < len(args):
+            page = int(args[i + 1])
+            i += 2
+        elif args[i] == "--brand" and i + 1 < len(args):
+            brand = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    pos_args = [a for a in args if not a.startswith("--")]
+
+    if cmd == "suggest":
+        if not pos_args:
+            sys.exit("Usage: pconline suggest <keyword>")
+        cmd_suggest(pos_args[0])
+    elif cmd == "search":
+        if not pos_args:
+            sys.exit("Usage: pconline search <keyword> [--json] [--page N]")
+        cmd_search(pos_args[0], page=page, json_out=json_out)
+    elif cmd == "detail":
+        if not pos_args:
+            sys.exit("Usage: pconline detail <url-or-id> [--json]")
+        cmd_detail(pos_args[0], json_out=json_out)
+    elif cmd == "list":
+        if not pos_args:
+            sys.exit("Usage: pconline list <category> [--brand X] [--page N] [--json]")
+        cmd_list(pos_args[0], brand=brand, page=page, json_out=json_out)
+    elif cmd == "categories":
+        cmd_categories()
+    else:
+        print(f"Unknown command: {cmd}")
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()
